@@ -58,7 +58,7 @@ export class Room {
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,skillCd:0,skill:'',downed:false,reviveProgress:0,level:1,rebirths:0,mult:1,passives:[]});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,skillCd:0,skill:'',downed:false,reviveProgress:0,level:1,xp:0,rebirths:0,mult:1,passives:[]});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id),serverAuthoritative:true});
     this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
@@ -104,9 +104,20 @@ export class Room {
     p.crit=clamp(Number(s.crit)||p.crit,0,1);
     p.skill=String(s.skill||p.skill||'').slice(0,32);p.skillCd=0;
     p.level=clamp(Number(s.level)||1,1,9999);
+    p.xp=clamp(Number(s.xp)||0,0,1e9);
     p.rebirths=clamp(Number(s.rebirths)||0,0,9999);
     p.mult=clamp(Number(s.mult)||1,1,1000);
     p.passives=Array.isArray(s.passives)?s.passives.slice(0,32).map(String):[];
+  }
+  grantXp(id,amount){
+    const p=this.players.get(id);if(!p)return;
+    p.xp=clamp((p.xp||0)+Math.max(0,Number(amount)||0),0,1e9);
+    let leveled=false;
+    while(p.xp>=Math.floor(100*Math.pow(1.12,(p.level||1)-1))){
+      p.xp-=Math.floor(100*Math.pow(1.12,(p.level||1)-1));p.level=clamp((p.level||1)+1,1,9999);leveled=true;
+      const scale=p.mult||1;p.maxHp+=Math.round(12*scale);p.atk+=Math.round(2.5*scale*10)/10;p.spd+=.05*scale;p.armor+=.35*scale;p.hp=p.maxHp;
+    }
+    this.send(id,{type:'profileSync',level:p.level,xp:p.xp,rebirths:p.rebirths,mult:p.mult,atk:p.atk,spd:p.spd,maxHp:p.maxHp,armor:p.armor,crit:p.crit,passives:p.passives||[]});
   }
   applyUpgrade(p,c){if(c==='hp'){p.maxHp+=25;p.hp+=25}else if(c==='atk')p.atk+=4;else if(c==='spd')p.spd+=.35;else if(c==='crit')p.crit=clamp(p.crit+.05,0,1);else if(c==='armor')p.armor+=3;else if(c==='heal')p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.35)}
   spawn(){
@@ -203,7 +214,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
       hitX=best.x;hitY=best.y;
       let dmg=clamp(Number(m.stats?.atk)||p.atk,1,10000);if(best.shieldT>0)dmg*=.35;if(Math.random()<p.crit)dmg*=2;
       best.hp-=dmg;best.hit=.12;
-      if(best.hp<=0){const reward=best.boss?80+this.wave*8:3+Math.floor(this.wave*.9);this.enemies=this.enemies.filter(e=>e.id!==best.id);this.send(p.id,{type:'reward',reward,xp:(best.boss?180:25)+this.wave*6});}
+      if(best.hp<=0){const reward=best.boss?80+this.wave*8:3+Math.floor(this.wave*.9);const xp=(best.boss?180:25)+this.wave*6;this.enemies=this.enemies.filter(e=>e.id!==best.id);this.grantXp(p.id,xp);this.send(p.id,{type:'reward',reward,xp});}
     }
     this.broadcast({type:'fx',kind:'attack',attackId:++this.attackSeq,from:p.id,x:p.x,y:p.y,angle,weapon:'sword',hit:!!best,hitX,hitY,serverNow:now});
   }
@@ -334,7 +345,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,rebirths:q.rebirths||0,mult:q.mult||1})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life}))}}
+  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,level:p.level||1,xp:p.xp||0,rebirths:p.rebirths||0,mult:p.mult||1,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,rebirths:q.rebirths||0,mult:q.mult||1})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life}))}}
   broadcastState(force=false){
     const now=Date.now();
     if(!force && now-this.lastState<STATE_MS)return;

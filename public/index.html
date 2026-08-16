@@ -784,7 +784,7 @@ function resetWaveUpgrades(){arenaState.waveUpgrades={hp:0,atk:0,spd:0,crit:0,ar
 function arenaStats(){const s=combatStats();$('lsaHpText').textContent=Math.max(0,Math.ceil(arena.player.hp))+' / '+Math.ceil(s.maxHp);$('lsaHpBar').style.width=Math.max(0,arena.player.hp/s.maxHp*100)+'%';$('lsaAtk').textContent=s.atk.toFixed(1);$('lsaSpd').textContent=s.spd.toFixed(1);$('lsaCrit').textContent=Math.round(s.crit*100)+'%';$('lsaArmor').textContent=s.armor.toFixed(1);$('lsaGold').textContent=loveBalance;$('lsaWave').textContent=arena.wave;$('lsaLevel').textContent=arenaState.level;$('lsaRebirth').textContent=arenaState.rebirths;$('lsaXpText').textContent=arenaState.xp+' / '+xpNeed();$('lsaXpBar').style.width=Math.min(100,arenaState.xp/xpNeed()*100)+'%';$('lsaMult').textContent='×'+arenaState.mult.toFixed(2);$('lsaWeapon').textContent=(arenaState.activeWeapon||'Rose Blade')+' ['+(arenaState.activeWeaponType==='bow'?'2':'1')+']';$('lsaArmorName').textContent=arenaState.gear.armor;$('lsaAcc').textContent=arenaState.gear.acc;$('lsaRebirthBtn').disabled=arenaState.level<50;const sk=arenaState.skills[0];$('lsaSkillName').textContent=sk?sk.name:'None';$('lsaSkillCd').textContent=sk?(arena.player.skillCd>0?arena.player.skillCd.toFixed(1)+'s':'Ready'):'Buy in Shop';$('lsaSkillUse').disabled=!sk||arena.player.skillCd>0||!arena.running}
 function arenaLog(t){const l=$('lsaLog');l.innerHTML='<div>• '+t+'</div>'+l.innerHTML}
 function toast(t){const el=$('lsaToast');el.textContent=t;el.classList.add('show');clearTimeout(el._tm);el._tm=setTimeout(()=>el.classList.remove('show'),1700)}
-function gainXp(amount){arenaState.xp+=amount;let leveled=false;while(arenaState.xp>=xpNeed()){arenaState.xp-=xpNeed();arenaState.level++;leveled=true;const scale=arenaState.mult;arenaState.stats.maxHp+=Math.round(12*scale);arenaState.stats.atk+=Math.round(2.5*scale*10)/10;arenaState.stats.spd+=.05*scale;arenaState.stats.armor+=.35*scale;arena.player.hp=arenaState.stats.maxHp;arenaLog('Level '+arenaState.level+'! Stats increased.');sfx('level');toast('LEVEL UP! ✨ Lv '+arenaState.level)}if(leveled)saveArena();arenaStats()}
+function gainXp(amount){arenaState.xp+=amount;let leveled=false;while(arenaState.xp>=xpNeed()){arenaState.xp-=xpNeed();arenaState.level++;leveled=true;const scale=arenaState.mult;arenaState.stats.maxHp+=Math.round(12*scale);arenaState.stats.atk+=Math.round(2.5*scale*10)/10;arenaState.stats.spd+=.05*scale;arenaState.stats.armor+=.35*scale;arena.player.hp=arenaState.stats.maxHp;arenaLog('Level '+arenaState.level+'! Stats increased.');sfx('level');toast('LEVEL UP! ✨ Lv '+arenaState.level)}saveArena();if(coopSocket&&coopSocket.readyState===1){coopSend({type:'profileSync',stats:coopStats()});}arenaStats()}
 function addArenaMoney(amount){addLove(amount);arenaStats();toast('+'+amount+' 💗')} 
 const bossDefs=[
  {name:'Heartbreaker',icon:'💔',hp:7,spd:.70,atk:3.4,skill:'dash'},
@@ -967,7 +967,7 @@ function coopStats(){
   return {
     atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:Math.min(arena.player.hp,c.maxHp),
     skill:(arenaState.skills[0]?.id||''),
-    level:Number(arenaState.level||1),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),
+    level:Number(arenaState.level||1),xp:Number(arenaState.xp||0),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),
     passives:Array.isArray(arenaState.passives)?arenaState.passives.slice(0,32):[]
   };
 }
@@ -1044,7 +1044,20 @@ function coopHandle(m){
   }
   if(m.type==='downed'){if(m.playerId===coopId){arena.player.downed=true;arena.player.reviveProgress=0;coopSetStatus('💚 DOWNED — another player can revive you');}burst(m.x,m.y,24,'death');sfx('hurt');return}
   if(m.type==='revive'){if(m.playerId===coopId){arena.player.downed=false;arena.player.reviveProgress=0;coopSetStatus('💚 Revived!');}burst(m.x,m.y,34,'level');sfx('level');return}
-  if(m.type==='reward'){if(m.reward)addArenaMoney(Number(m.reward)||0);if(m.xp)gainXp(Number(m.xp)||0);return;}
+  if(m.type==='profileSync'){
+    if(Number.isFinite(m.level))arenaState.level=Number(m.level);
+    if(Number.isFinite(m.xp))arenaState.xp=Number(m.xp);
+    if(Number.isFinite(m.rebirths))arenaState.rebirths=Number(m.rebirths);
+    if(Number.isFinite(m.mult))arenaState.mult=Number(m.mult);
+    if(Number.isFinite(m.atk))arenaState.stats.atk=Number(m.atk);
+    if(Number.isFinite(m.spd))arenaState.stats.spd=Number(m.spd);
+    if(Number.isFinite(m.maxHp))arenaState.stats.maxHp=Number(m.maxHp);
+    if(Number.isFinite(m.armor))arenaState.stats.armor=Number(m.armor);
+    if(Number.isFinite(m.crit))arenaState.stats.crit=Number(m.crit);
+    if(Array.isArray(m.passives))arenaState.passives=m.passives;
+    saveArena();arena.player.hp=Math.min(arena.player.hp,combatStats().maxHp);arenaStats();return;
+  }
+  if(m.type==='reward'){if(m.reward)addArenaMoney(Number(m.reward)||0);return;}
   if(m.type==='skillFx'){
     const p=coopPeers[m.from];
     const a=Number.isFinite(m.angle)?m.angle:0;
@@ -1127,6 +1140,10 @@ function coopApplyState(m){
     if(!Number.isFinite(arena.player.targetX))arena.player.targetX=m.player.x;
     if(!Number.isFinite(arena.player.targetY))arena.player.targetY=m.player.y;
     arena.player.hp=m.player.hp;arena.player.maxHp=m.player.maxHp||arena.player.maxHp;arena.player.angle=m.player.angle||arena.player.angle;arena.player.weapon=m.player.weapon||arena.player.weapon||'sword';arena.player.skill=m.player.skill||arena.player.skill||'';arena.player.skillCd=Number(m.player.skillCd)||0;arena.player.downed=!!m.player.downed;arena.player.reviveProgress=m.player.reviveProgress||0;
+    if(Number.isFinite(m.player.level))arenaState.level=m.player.level;
+    if(Number.isFinite(m.player.xp))arenaState.xp=m.player.xp;
+    if(Number.isFinite(m.player.rebirths))arenaState.rebirths=m.player.rebirths;
+    if(Number.isFinite(m.player.mult))arenaState.mult=m.player.mult;
     if(Number.isFinite(m.player.atk))coopServerStats=coopServerStats||{};
     if(Number.isFinite(m.player.atk))coopServerStats.atk=m.player.atk;
     if(Number.isFinite(m.player.spd))coopServerStats.spd=m.player.spd;
