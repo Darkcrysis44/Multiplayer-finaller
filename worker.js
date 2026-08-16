@@ -97,7 +97,7 @@ export class Room {
       const projectile={
         id:'a'+(++this.attackSeq),owner:p.id,x:p.x+Math.cos(angle)*22,y:p.y+Math.sin(angle)*22,
         vx:Math.cos(angle)*8.5,vy:Math.sin(angle)*8.5,angle,life:1.8,damage:clamp(Number(m.stats?.atk)||p.atk,1,10000),
-        crit:Math.random()<p.crit,hit:false
+        crit:Math.random()<p.crit,hit:false,radius:8
       };
       this.projectiles.push(projectile);
       this.broadcast({type:'fx',kind:'projectile',projectile:{id:projectile.id,owner:p.id,x:projectile.x,y:projectile.y,vx:projectile.vx,vy:projectile.vy,angle,weapon:'bow'},serverNow:now});
@@ -132,20 +132,32 @@ export class Room {
     }
     // Authoritative co-op arrows: move on the server and damage only on actual collision.
     for(const a of this.projectiles){
-      a.x+=a.vx*60*dt;a.y+=a.vy*60*dt;a.life-=dt;
-      let first=null,bestAlong=Infinity;
+      // Continuous/swept collision: test the whole arrow segment for this server tick.
+      // This prevents tunnelling and makes damage happen exactly when the moving arrow
+      // reaches the first enemy, rather than before it visually arrives.
+      const prevX=a.x,prevY=a.y;
+      const stepX=a.vx*60*dt,stepY=a.vy*60*dt;
+      const nextX=prevX+stepX,nextY=prevY+stepY;
+      a.x=nextX;a.y=nextY;a.life-=dt;
+      let first=null,bestT=Infinity;
+      const segLenSq=stepX*stepX+stepY*stepY||1;
       for(const e of this.enemies){
-        const rx=e.x-a.x,ry=e.y-a.y;
-        const d=Math.hypot(rx,ry);
-        if(d<=(e.r||20)+10){
-          const along=rx*a.vx+ry*a.vy;
-          if(along>0 && along<bestAlong){first=e;bestAlong=along}
+        const ex=e.x-prevX,ey=e.y-prevY;
+        let t=(ex*stepX+ey*stepY)/segLenSq;
+        t=Math.max(0,Math.min(1,t));
+        const cx=prevX+stepX*t,cy=prevY+stepY*t;
+        const hitRadius=(e.r||20)+(a.radius||8);
+        const dx=e.x-cx,dy=e.y-cy;
+        if(dx*dx+dy*dy<=hitRadius*hitRadius && t<bestT){
+          first=e;bestT=t;
         }
       }
       if(first){
+        // Put the authoritative arrow exactly on the collision point.
+        a.x=prevX+stepX*bestT;a.y=prevY+stepY*bestT;
         let dmg=a.damage;if(a.crit)dmg*=2;
-        first.hp-=dmg;first.hit=.12;a.hit=true;a.hitX=first.x;a.hitY=first.y;a.life=0;
-        this.broadcast({type:'projectileHit',projectileId:a.id,x:first.x,y:first.y,enemyId:first.id,damage:dmg,serverNow:now});
+        first.hp-=dmg;first.hit=.12;a.hit=true;a.hitX=a.x;a.hitY=a.y;a.life=0;
+        this.broadcast({type:'projectileHit',projectileId:a.id,x:a.x,y:a.y,enemyId:first.id,damage:dmg,serverNow:now});
         if(first.hp<=0){
           const reward=first.boss?80+this.wave*8:3+Math.floor(this.wave*.9);
           this.enemies=this.enemies.filter(e=>e.id!==first.id);
