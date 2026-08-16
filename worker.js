@@ -1,6 +1,6 @@
 const MAX_PLAYERS = 4;
 const TICK_MS = 50;       // 20 Hz authoritative simulation
-const STATE_MS = 100;     // 10 Hz snapshots to clients
+const STATE_MS = 50;      // 20 Hz snapshots: smoother remote world at higher latency
 const WIDTH = 1200, HEIGHT = 700;
 const TYPES = {
   broken:[.55,1,1,21,'Broken Heart','Common'], charger:[.10,.8,1.8,19,'Heart Charger','Uncommon'],
@@ -37,7 +37,7 @@ export class Room {
   constructor(state) {
     this.state=state; this.sockets=new Map(); this.players=new Map();
     this.phase='lobby'; this.wave=1; this.enemies=[]; this.spawned=0; this.nextEnemy=1;
-    this.lastTick=Date.now(); this.lastState=0; this.nextTickAlarm=null; this.countdownAt=0;
+    this.lastTick=Date.now(); this.lastState=0; this.stateSeq=0; this.nextTickAlarm=null; this.countdownAt=0;
     this.offer=null; this.picks=new Map(); this.attackSeq=0;
   }
   async fetch(request) {
@@ -47,7 +47,7 @@ export class Room {
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
     this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0});
-    this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id)});
+    this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id),serverAuthoritative:true});
     this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
     const cleanup=()=>{this.sockets.delete(id);this.players.delete(id);this.picks.delete(id);this.broadcastPlayers();if(this.players.size===0){this.resetRoom();}};
@@ -107,11 +107,12 @@ export class Room {
     if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle})),enemies:this.enemies}}
+  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle})),enemies:this.enemies}}
   broadcastState(force=false){
     const now=Date.now();
     if(!force && now-this.lastState<STATE_MS)return;
     this.lastState=now;
+    this.stateSeq++;
     for(const id of this.sockets.keys())this.send(id,{type:'state',...this.makeState(this.players.get(id))});
   }
   broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle}))})}
