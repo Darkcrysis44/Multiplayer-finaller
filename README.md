@@ -1,38 +1,16 @@
-# Love Sword Arena — Cloudflare Server-Authoritative Co-op
+# Love Sword Arena — Server Authoritative Co-op
 
-GitHub + Cloudflare Workers + Durable Objects + WebSockets.
+This build keeps the existing game and moves the online battle simulation to the Cloudflare Durable Object.
 
-## Multiplayer architecture
-- The **Cloudflare Durable Object is the game server**.
-- There is **no host-authoritative gameplay** and no player is the simulation host.
-- Player browsers only send input/attack events and render the authoritative server state.
-- Server time drives countdowns, wave transitions, enemy movement, enemy HP, damage, rewards and upgrade synchronization.
-- The server simulates at 20 Hz and sends compact state snapshots at 10 Hz.
-- If a player Alt+Tabs, the server keeps running; when that player returns, the client receives the current server state.
-- Other players are not affected by another player's tab being backgrounded.
-- Wave upgrade offers are sent to every connected player. Each player chooses independently; the next wave begins only after every connected player has chosen.
-- Attack FX are broadcast as server events so remote attack animations do not depend on the attacker's render loop.
-
-## Co-op flow
-1. Click **CO-OP**. The solo battle stops immediately.
-2. Create a room or join with the same room code.
-3. The **START BATTLE** button is available in the server lobby; there is no host authority.
-4. Any connected player can press START BATTLE.
-5. Cloudflare schedules the synchronized battle start.
-6. Cloudflare controls the battle from then on.
+## Important fixes
+- The co-op runtime/render loop is started when the server starts the battle.
+- WASD / arrow input is continuously sent to the Cloudflare server.
+- The server owns player positions, enemies, waves, damage, attacks and upgrades.
+- Cloudflare Durable Object alarms drive the authoritative game tick.
+- Alarm scheduling checks Durable Object storage, so a stale in-memory flag cannot stop the server loop.
+- Returning from an inactive/background tab immediately resends current input.
+- A lost WebSocket reconnects while the co-op arena is still open.
+- Backgrounded clients cannot leave stale movement input running forever.
 
 ## Deploy
-Cloudflare Workers Builds:
-- Build command: leave blank
-- Deploy command: `npx wrangler deploy`
-- Root directory: `/`
-
-The Worker name is `multiplayer-game1` to match the existing Cloudflare project.
-
-
-## Background-tab resilience
-- The browser is never the authoritative simulation host.
-- Player input is treated as transient input; the server stops applying stale input after 750 ms.
-- Client WebSockets automatically reconnect after an unexpected disconnect while co-op is active.
-- Returning from a background tab requests a fresh authoritative snapshot from Cloudflare.
-- Other players continue to be simulated by the Durable Object even if one browser is throttled or disconnected.
+Upload the contents of this archive to the GitHub repository and let the connected Cloudflare Worker deployment build it.

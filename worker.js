@@ -38,7 +38,6 @@ export class Room {
     this.state=state; this.sockets=new Map(); this.players=new Map();
     this.phase='lobby'; this.wave=1; this.enemies=[]; this.spawned=0; this.nextEnemy=1;
     this.lastTick=Date.now(); this.lastState=0; this.nextTickAlarm=null; this.countdownAt=0;
-    this.roomEpoch=Date.now();
     this.offer=null; this.picks=new Map(); this.attackSeq=0;
   }
   async fetch(request) {
@@ -47,30 +46,37 @@ export class Room {
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0,lastInput:Date.now()});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id)});
-    this.broadcastPlayers(); this.ensureAlarm();
+    this.broadcastPlayers(); await this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
     const cleanup=()=>{this.sockets.delete(id);this.players.delete(id);this.picks.delete(id);this.broadcastPlayers();if(this.players.size===0){this.resetRoom();}};
     server.addEventListener('message',onMessage); server.addEventListener('close',cleanup); server.addEventListener('error',cleanup);
     return new Response(null,{status:101,webSocket:client});
   }
-  resetRoom(){this.phase='lobby';this.wave=1;this.enemies=[];this.spawned=0;this.offer=null;this.picks.clear();this.countdownAt=0;this.roomEpoch=Date.now();this.lastTick=Date.now();}
-  async ensureAlarm(){if(this.nextTickAlarm)return;this.nextTickAlarm=Date.now()+TICK_MS;try{await this.state.storage.setAlarm(this.nextTickAlarm)}catch{this.nextTickAlarm=null}}
-  async alarm(){this.nextTickAlarm=null;const now=Date.now();this.tick(now);if(this.sockets.size)await this.ensureAlarm()}
+  resetRoom(){this.phase='lobby';this.wave=1;this.enemies=[];this.spawned=0;this.offer=null;this.picks.clear();this.countdownAt=0;}
+  async ensureAlarm(){
+    if(this.sockets.size===0)return;
+    const existing=await this.state.storage.getAlarm().catch(()=>null);
+    if(existing!==null)return;
+    this.nextTickAlarm=Date.now()+TICK_MS;
+    try{await this.state.storage.setAlarm(this.nextTickAlarm)}
+    catch{this.nextTickAlarm=null}
+  }
+  async alarm(){
+    this.nextTickAlarm=null;
+    const now=Date.now();
+    try{this.tick(now)}
+    finally{if(this.sockets.size)await this.ensureAlarm()}
+  }
   message(id,m){const p=this.players.get(id);if(!p)return;
     if(m.type==='join'){p.name=String(m.name||'Player').slice(0,20)||'Player';this.setStats(p,m.stats);this.broadcastPlayers();return;}
-    if(m.type==='startRequest' && this.phase==='lobby' && this.players.size>=1){this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+2000;
+    if(m.type==='startRequest' && this.phase==='lobby' && this.players.size>=1){
+      this.setStats(p,m.stats);this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+2000;
       this.broadcast({type:'serverStart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
     }
     if(m.type==='input' && (this.phase==='battle'||this.phase==='countdown')){
-      // Inputs are hints only. The server owns position and applies a timeout so a
-      // backgrounded/frozen browser can never keep driving a player forever.
-      p.ix=clamp(Number(m.x)||0,-1,1);
-      p.iy=clamp(Number(m.y)||0,-1,1);
-      p.angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;
-      p.lastInput=Date.now();
-      return;
+      p.ix=clamp(Number(m.x)||0,-1,1);p.iy=clamp(Number(m.y)||0,-1,1);p.angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;return;
     }
     if(m.type==='attack' && this.phase==='battle'){this.serverAttack(p,m);return;}
     if(m.type==='upgradePick' && this.phase==='upgrade' && this.offer && m.offerId===this.offer.id && !this.picks.has(id)){
@@ -100,12 +106,7 @@ export class Room {
     if(this.phase!=='battle')return;
     const dt=raw/1000;
     for(const p of this.players.values()){
-      // Browser tabs are throttled when backgrounded. Never let stale client input
-      // continue indefinitely; the server remains the sole simulation authority.
-      if(now-p.lastInput>750){p.ix=0;p.iy=0}
-      const l=Math.hypot(p.ix,p.iy)||1;
-      p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);
-      p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
+      const l=Math.hypot(p.ix,p.iy)||1;p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
     }
     for(const e of this.enemies){
       let target=null,bd=Infinity;for(const p of this.players.values()){const d=dist(e,p);if(d<bd){bd=d;target=p}}if(!target)continue;
@@ -118,7 +119,7 @@ export class Room {
     if(now-this.lastState>=STATE_MS){this.lastState=now;this.broadcastState(false)}
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,serverNow:Date.now(),roomEpoch:this.roomEpoch,player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle})),enemies:this.enemies}}
+  makeState(p){return {phase:this.phase,wave:this.wave,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle})),enemies:this.enemies}}
   broadcastState(force){if(!force&&Date.now()-this.lastState<STATE_MS)return;this.lastState=Date.now();for(const id of this.sockets.keys())this.send(id,{type:'state',...this.makeState(this.players.get(id))})}
   broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle}))})}
   send(id,msg){const ws=this.sockets.get(id);if(ws)try{ws.send(JSON.stringify(msg))}catch{}}
