@@ -100,18 +100,23 @@ export class Room {
   serverSkill(p,m){
     const now=Date.now();
     if(p.skillCd>0)return;
-    const skill=String(m.skill||p.skill||'');
+    const requestedSkill=String(m.skill||p.skill||'');
+    const SKILL_ALIASES={
+      nova:'nova', dash:'dash', barrage:'barrage', moon:'moon', storm:'storm',
+      bloom:'moon', break:'barrage', eclipse:'storm', divine:'nova', cataclysm:'moon'
+    };
+    const skill=SKILL_ALIASES[requestedSkill]||'';
     const angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;
     p.angle=angle;
     const stats=p.atk;
     const defs={nova:{cd:8},dash:{cd:5},barrage:{cd:10},moon:{cd:7},storm:{cd:12}};
-    if(!defs[skill])return;
+    if(!skill)return;
     p.skillCd=defs[skill].cd;
     const hitIds=[];
     const damage=(e,mult)=>{if(!e||e.hp<=0)return;let d=stats*mult;if(Math.random()<p.crit)d*=2;e.hp=Math.max(0,e.hp-d);e.hit=.12;hitIds.push({id:e.id,damage:d});};
     if(skill==='nova'){
       for(const e of this.enemies)if(dist(e,p)<190)damage(e,3);
-      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
     }else if(skill==='barrage'){
       for(let j=-2;j<=2;j++){
         const a=angle+j*.18;
@@ -121,18 +126,18 @@ export class Room {
           if(d<165&&Math.abs(da)<.65)damage(e,2.2);
         }
       }
-      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
     }else if(skill==='moon'){
       const proj={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*7,vy:Math.sin(angle)*7,angle,life:2.2,damage:stats*5,skill:'moon',radius:18};
       this.projectiles.push(proj);
-      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,projectile:proj,serverNow:now});
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,projectile:proj,serverNow:now});
     }else if(skill==='storm'){
       for(const e of this.enemies)if(dist(e,p)<260)damage(e,2.5);
-      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
     }else if(skill==='dash'){
       p.x=clamp(p.x+Math.cos(angle)*180,30,WIDTH-30);p.y=clamp(p.y+Math.sin(angle)*180,62,HEIGHT-30);
       for(const e of this.enemies)if(dist(e,p)<75)damage(e,2);
-      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
     }
     for(const h of hitIds){
       const e=this.enemies.find(q=>q.id===h.id);
