@@ -46,7 +46,7 @@ export class Room {
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0,lastInputAt:Date.now()});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id)});
     this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
@@ -64,7 +64,7 @@ export class Room {
       this.broadcast({type:'serverStart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
     }
     if(m.type==='input' && (this.phase==='battle'||this.phase==='countdown')){
-      p.ix=clamp(Number(m.x)||0,-1,1);p.iy=clamp(Number(m.y)||0,-1,1);p.angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;p.lastInputAt=Date.now();return;
+      p.ix=clamp(Number(m.x)||0,-1,1);p.iy=clamp(Number(m.y)||0,-1,1);p.angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;return;
     }
     if(m.type==='attack' && this.phase==='battle'){this.serverAttack(p,m);return;}
     if(m.type==='upgradePick' && this.phase==='upgrade' && this.offer && m.offerId===this.offer.id && !this.picks.has(id)){
@@ -94,12 +94,7 @@ export class Room {
     if(this.phase!=='battle')return;
     const dt=raw/1000;
     for(const p of this.players.values()){
-      // Browsers throttle background tabs. Never keep applying an old movement
-      // command while a client is asleep or disconnected.
-      if(now-(p.lastInputAt||0)>450){p.ix=0;p.iy=0}
-      const l=Math.hypot(p.ix,p.iy)||1;
-      p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);
-      p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
+      const l=Math.hypot(p.ix,p.iy)||1;p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
     }
     for(const e of this.enemies){
       let target=null,bd=Infinity;for(const p of this.players.values()){const d=dist(e,p);if(d<bd){bd=d;target=p}}if(!target)continue;
@@ -109,11 +104,16 @@ export class Room {
     const targetCount=this.wave%5===0?1:this.wave*3+4;
     if(this.spawned<targetCount&&this.enemies.length<Math.min(6+this.wave,15))this.spawn();
     if(this.spawned>=targetCount&&this.enemies.length===0){this.phase='upgrade';this.offer={id:String(Date.now())+Math.random(),choices:[...UPGRADE_CHOICES].sort(()=>Math.random()-.5).slice(0,3)};this.picks.clear();this.broadcast({type:'upgradeOffer',offerId:this.offer.id,choices:this.offer.choices,serverNow:now});return;}
-    if(now-this.lastState>=STATE_MS){this.lastState=now;this.broadcastState(false)}
+    if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
   makeState(p){return {phase:this.phase,wave:this.wave,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle})),enemies:this.enemies}}
-  broadcastState(force){if(!force&&Date.now()-this.lastState<STATE_MS)return;this.lastState=Date.now();for(const id of this.sockets.keys())this.send(id,{type:'state',...this.makeState(this.players.get(id))})}
+  broadcastState(force=false){
+    const now=Date.now();
+    if(!force && now-this.lastState<STATE_MS)return;
+    this.lastState=now;
+    for(const id of this.sockets.keys())this.send(id,{type:'state',...this.makeState(this.players.get(id))});
+  }
   broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle}))})}
   send(id,msg){const ws=this.sockets.get(id);if(ws)try{ws.send(JSON.stringify(msg))}catch{}}
   broadcast(msg){const d=JSON.stringify(msg);for(const[id,ws]of this.sockets){try{ws.send(d)}catch{this.sockets.delete(id);this.players.delete(id)}}}

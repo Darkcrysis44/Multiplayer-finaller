@@ -1,26 +1,36 @@
 # Love Sword Arena — Cloudflare Server-Authoritative Co-op
 
-This archive is based on the original game build and preserves the existing game UI, single-player combat, progression, shop and assets.
+GitHub + Cloudflare Workers + Durable Objects + WebSockets.
 
 ## Multiplayer architecture
+- The **Cloudflare Durable Object is the game server**.
+- There is **no host-authoritative gameplay** and no player is the simulation host.
+- Player browsers only send input/attack events and render the authoritative server state.
+- Server time drives countdowns, wave transitions, enemy movement, enemy HP, damage, rewards and upgrade synchronization.
+- The server simulates at 20 Hz and sends compact state snapshots at 10 Hz.
+- If a player Alt+Tabs, the server keeps running; when that player returns, the client receives the current server state.
+- Other players are not affected by another player's tab being backgrounded.
+- Wave upgrade offers are sent to every connected player. Each player chooses independently; the next wave begins only after every connected player has chosen.
+- Attack FX are broadcast as server events so remote attack animations do not depend on the attacker's render loop.
 
-Cloudflare Durable Objects own the live room:
-- player positions and HP
-- enemy spawning and movement
-- waves and upgrade phase
-- attack validation and damage
-- authoritative 20 Hz game tick
-- 10 Hz state snapshots
-
-Clients send only input/intent and render the server state.
-
-## Important fixes
-- Co-op render/input loop starts immediately when the room connects (the previous build could show a static arena).
-- Server movement stops after 450 ms without an input packet, so a backgrounded tab cannot keep moving forever.
-- Returning to a tab immediately sends current input and resumes rendering.
-- Unexpected WebSocket loss triggers a reconnect.
-- Closing/leaving the game disables reconnect.
-- The original game files and assets are retained.
+## Co-op flow
+1. Click **CO-OP**. The solo battle stops immediately.
+2. Create a room or join with the same room code.
+3. The **START BATTLE** button is available in the server lobby; there is no host authority.
+4. Any connected player can press START BATTLE.
+5. Cloudflare schedules the synchronized battle start.
+6. Cloudflare controls the battle from then on.
 
 ## Deploy
-Replace the repository files with this archive's contents and deploy the Worker.
+Cloudflare Workers Builds:
+- Build command: leave blank
+- Deploy command: `npx wrangler deploy`
+- Root directory: `/`
+
+The Worker name is `multiplayer-game1` to match the existing Cloudflare project.
+
+
+## Fixed build notes
+- Fixed the 10 Hz authoritative state broadcast bug that suppressed normal snapshots.
+- Co-op local player rendering now interpolates toward authoritative server positions between snapshots.
+- Server remains authoritative for movement, enemy AI, HP, damage, waves and upgrades.
