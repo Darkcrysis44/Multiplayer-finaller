@@ -962,7 +962,7 @@ function coopConnect(){
   coopSocket.onerror=()=>coopSetStatus('⚠️ Connection error');
   coopSocket.onmessage=e=>{try{coopHandle(JSON.parse(e.data))}catch(err){console.error(err)}};
 }
-function coopStats(){const c=coopServerStats||combatStats();return {atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:arena.player.hp}}
+function coopStats(){const c=coopServerStats||combatStats();return {atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:arena.player.hp,skill:(arenaState.skills[0]?.id||'')}}
 function coopSend(msg){if(coopSocket&&coopSocket.readyState===1)coopSocket.send(JSON.stringify(msg))}
 function applyUpgradeChoice(choice){
   const map={hp:'hp',atk:'atk',spd:'spd',crit:'crit',armor:'armor',heal:'heal'};
@@ -1037,6 +1037,22 @@ function coopHandle(m){
   if(m.type==='downed'){if(m.playerId===coopId){arena.player.downed=true;arena.player.reviveProgress=0;coopSetStatus('💚 DOWNED — another player can revive you');}burst(m.x,m.y,24,'death');sfx('hurt');return}
   if(m.type==='revive'){if(m.playerId===coopId){arena.player.downed=false;arena.player.reviveProgress=0;coopSetStatus('💚 Revived!');}burst(m.x,m.y,34,'level');sfx('level');return}
   if(m.type==='reward'){if(m.reward)addArenaMoney(Number(m.reward)||0);if(m.xp)gainXp(Number(m.xp)||0);return;}
+  if(m.type==='skillFx'){
+    const p=coopPeers[m.from];
+    const a=Number.isFinite(m.angle)?m.angle:0;
+    if(p){p.angle=a;p.targetAngle=a;p.attackAngle=a;p.slashT=m.skill==='dash'?0:.25;p.skill=m.skill;}
+    if(m.skill==='moon' && m.projectile){
+      const q=m.projectile;
+      if(!arena.projectiles.some(x=>x.id===q.id))arena.projectiles.push({id:q.id,x:q.x,y:q.y,targetX:q.x,targetY:q.y,vx:q.vx,vy:q.vy,life:q.life,damage:0,angle:q.angle,owner:q.owner===coopId?'coopArrow':'remoteArrow',kind:'playerSkillArrow'});
+    }
+    if(m.skill==='nova'){burst(m.x,m.y,40,'death');sfx('level');}
+    else if(m.skill==='barrage'){for(let j=-2;j<=2;j++)arena.slashes.push({x:m.x,y:m.y,angle:a+j*.18,t:.35,maxT:.35,remote:true});burst(m.x,m.y,35,'slash');sfx('level');}
+    else if(m.skill==='storm'){burst(m.x,m.y,45,'death');sfx('level');}
+    else if(m.skill==='dash'){burst(m.x,m.y,28,'slash');sfx('slash');}
+    else if(m.skill==='moon'){arena.slashes.push({x:m.x,y:m.y,angle:a,t:.35,maxT:.35,remote:true});burst(m.x+Math.cos(a)*30,m.y+Math.sin(a)*30,24,'slash');sfx('level');}
+    if(Array.isArray(m.hitIds))for(const hit of m.hitIds){const e=arena.enemies.find(x=>x.id===hit.id);if(e){e.hp=Math.max(0,e.hp-(Number(hit.damage)||0));e.hit=.15;}}
+    return;
+  }
   if(m.type==='fx'){
     if(m.kind==='projectile' && m.projectile){
       const a=m.projectile;
@@ -1101,7 +1117,7 @@ function coopApplyState(m){
     if(Number.isFinite(m.player.y)){coopServerY=m.player.y;arena.player.targetY=m.player.y;}
     if(!Number.isFinite(arena.player.targetX))arena.player.targetX=m.player.x;
     if(!Number.isFinite(arena.player.targetY))arena.player.targetY=m.player.y;
-    arena.player.hp=m.player.hp;arena.player.maxHp=m.player.maxHp||arena.player.maxHp;arena.player.angle=m.player.angle||arena.player.angle;arena.player.weapon=m.player.weapon||arena.player.weapon||'sword';arena.player.downed=!!m.player.downed;arena.player.reviveProgress=m.player.reviveProgress||0;
+    arena.player.hp=m.player.hp;arena.player.maxHp=m.player.maxHp||arena.player.maxHp;arena.player.angle=m.player.angle||arena.player.angle;arena.player.weapon=m.player.weapon||arena.player.weapon||'sword';arena.player.skill=m.player.skill||arena.player.skill||'';arena.player.skillCd=Number(m.player.skillCd)||0;arena.player.downed=!!m.player.downed;arena.player.reviveProgress=m.player.reviveProgress||0;
     if(Number.isFinite(m.player.atk))coopServerStats=coopServerStats||{};
     if(Number.isFinite(m.player.atk))coopServerStats.atk=m.player.atk;
     if(Number.isFinite(m.player.spd))coopServerStats.spd=m.player.spd;
@@ -1111,7 +1127,7 @@ function coopApplyState(m){
     arenaStats();
   }
   if(Array.isArray(m.players)){
-    m.players.forEach(p=>{if(p.id===coopId)return;let q=coopPeers[p.id]||(coopPeers[p.id]={id:p.id,name:p.name||'Player',x:p.x||80,y:p.y||100,targetX:p.x||80,targetY:p.y||100,angle:0,targetAngle:0,weapon:p.weapon||'sword',hp:p.hp,maxHp:p.maxHp,slashT:0});q.name=p.name||q.name;q.targetX=p.x;q.targetY=p.y;q.targetAngle=p.angle||0;q.weapon=p.weapon||q.weapon||'sword';q.hp=p.hp;q.maxHp=p.maxHp;q.downed=!!p.downed;q.reviveProgress=p.reviveProgress||0});
+    m.players.forEach(p=>{if(p.id===coopId)return;let q=coopPeers[p.id]||(coopPeers[p.id]={id:p.id,name:p.name||'Player',x:p.x||80,y:p.y||100,targetX:p.x||80,targetY:p.y||100,angle:0,targetAngle:0,weapon:p.weapon||'sword',skill:p.skill||'',hp:p.hp,maxHp:p.maxHp,slashT:0});q.name=p.name||q.name;q.targetX=p.x;q.targetY=p.y;q.targetAngle=p.angle||0;q.weapon=p.weapon||q.weapon||'sword';q.skill=p.skill||q.skill||'';q.hp=p.hp;q.maxHp=p.maxHp;q.downed=!!p.downed;q.reviveProgress=p.reviveProgress||0});
   }
   if(Array.isArray(m.projectiles)){
     const incoming=new Map(m.projectiles.map(a=>[a.id,a]));
@@ -1245,7 +1261,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)arenaSimul
 function arenaLoop(){if(!arenaSimTimer)startArenaSimulation();arenaRenderLoop()}
 function startArena(){initArenaAudio();arenaModal.classList.remove('hidden');$('lsaArchive').classList.add('hidden');resetArenaRun();arena.running=true;arenaStats();arenaLog('Enter the arena. Broken-heart fighters are coming...');requestAnimationFrame(arenaLoop)}
 function endArena(){arena.running=false;arenaModal.classList.add('hidden');showCoopStart(false);coopStarted=false;try{if(coopSocket)coopSocket.close()}catch(e){}coopSocket=null;coopId=null;coopPeers={};coopServerStats=null;coopServerPhase='lobby';saveArena()}
-function useSkill(){const sk=arenaState.skills[0];if(!arena.running||!sk||arena.player.skillCd>0)return;const p=arena.player;if(coopSocket&&coopSocket.readyState===1&&coopStarted){toast('Skills are server-synced in co-op after the next server update.');return;}if(sk.id==='nova'){arena.player.skillCd=8;const cs=combatStats();arena.shake=12;for(const e of [...arena.enemies]){const d=Math.hypot(e.x-p.x,e.y-p.y);if(d<190){damageEnemy(e,cs.atk*3)}}burst(p.x,p.y,40,'death');sfx('level');toast('HEART NOVA! 💗')}else if(sk.id==='barrage'){arena.player.skillCd=10;const cs=combatStats();for(let j=-2;j<=2;j++){const a=p.angle+j*.18;arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});for(const e of [...arena.enemies]){const dd=Math.hypot(e.x-p.x,e.y-p.y);let da=Math.atan2(e.y-p.y,e.x-p.x)-a;da=Math.atan2(Math.sin(da),Math.cos(da));if(dd<165&&Math.abs(da)<.65)damageEnemy(e,cs.atk*2.2)}}burst(p.x,p.y,35,'slash');sfx('level');toast('ROSE BARRAGE! 🌹')}else if(sk.id==='moon'){arena.player.skillCd=7;const cs=combatStats();const a=p.angle;arena.projectiles.push({x:p.x,y:p.y,vx:Math.cos(a)*7,vy:Math.sin(a)*7,life:2.2,damage:cs.atk*5,angle:a,owner:'playerSkill',wide:true});arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});burst(p.x+Math.cos(a)*30,p.y+Math.sin(a)*30,24,'slash');sfx('level');toast('MOON SLASH! 🌙')}else if(sk.id==='storm'){arena.player.skillCd=12;const cs=combatStats();for(let i=0;i<10;i++){const a=Math.random()*Math.PI*2,d=70+Math.random()*220;arena.projectiles.push({x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d,vx:0,vy:0,life:1.0,damage:cs.atk*1.5,angle:a,owner:'playerSkill',rain:true,t:0});}for(const e of [...arena.enemies]){if(Math.hypot(e.x-p.x,e.y-p.y)<260)damageEnemy(e,cs.atk*2.5)}burst(p.x,p.y,45,'death');sfx('level');toast('HEARTSTORM! 💞')}else if(sk.id==='dash'){arena.player.skillCd=5;const cs=combatStats();const nx=p.x+Math.cos(p.angle)*180,ny=p.y+Math.sin(p.angle)*180;p.x=Math.max(30,Math.min(arena.w-30,nx));p.y=Math.max(62,Math.min(arena.h-30,ny));arena.slashes.push({x:p.x,y:p.y,angle:p.angle,t:.3});for(const e of [...arena.enemies]){if(Math.hypot(e.x-p.x,e.y-p.y)<75)damageEnemy(e,cs.atk*2)}burst(p.x,p.y,28,'slash');sfx('slash');toast('LOVE DASH! ✨')}arenaStats()}
+function useSkill(){const sk=arenaState.skills[0];if(!arena.running||!sk||arena.player.skillCd>0)return;const p=arena.player;if(coopSocket&&coopSocket.readyState===1&&coopStarted){const skId=sk.id;const a=Number.isFinite(p.angle)?p.angle:0;coopSend({type:'skill',skill:skId,angle:a});arena.player.skillCd=({nova:8,dash:5,barrage:10,moon:7,storm:12}[skId]||5);toast(sk.name+' ✨');return;}if(sk.id==='nova'){arena.player.skillCd=8;const cs=combatStats();arena.shake=12;for(const e of [...arena.enemies]){const d=Math.hypot(e.x-p.x,e.y-p.y);if(d<190){damageEnemy(e,cs.atk*3)}}burst(p.x,p.y,40,'death');sfx('level');toast('HEART NOVA! 💗')}else if(sk.id==='barrage'){arena.player.skillCd=10;const cs=combatStats();for(let j=-2;j<=2;j++){const a=p.angle+j*.18;arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});for(const e of [...arena.enemies]){const dd=Math.hypot(e.x-p.x,e.y-p.y);let da=Math.atan2(e.y-p.y,e.x-p.x)-a;da=Math.atan2(Math.sin(da),Math.cos(da));if(dd<165&&Math.abs(da)<.65)damageEnemy(e,cs.atk*2.2)}}burst(p.x,p.y,35,'slash');sfx('level');toast('ROSE BARRAGE! 🌹')}else if(sk.id==='moon'){arena.player.skillCd=7;const cs=combatStats();const a=p.angle;arena.projectiles.push({x:p.x,y:p.y,vx:Math.cos(a)*7,vy:Math.sin(a)*7,life:2.2,damage:cs.atk*5,angle:a,owner:'playerSkill',wide:true});arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});burst(p.x+Math.cos(a)*30,p.y+Math.sin(a)*30,24,'slash');sfx('level');toast('MOON SLASH! 🌙')}else if(sk.id==='storm'){arena.player.skillCd=12;const cs=combatStats();for(let i=0;i<10;i++){const a=Math.random()*Math.PI*2,d=70+Math.random()*220;arena.projectiles.push({x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d,vx:0,vy:0,life:1.0,damage:cs.atk*1.5,angle:a,owner:'playerSkill',rain:true,t:0});}for(const e of [...arena.enemies]){if(Math.hypot(e.x-p.x,e.y-p.y)<260)damageEnemy(e,cs.atk*2.5)}burst(p.x,p.y,45,'death');sfx('level');toast('HEARTSTORM! 💞')}else if(sk.id==='dash'){arena.player.skillCd=5;const cs=combatStats();const nx=p.x+Math.cos(p.angle)*180,ny=p.y+Math.sin(p.angle)*180;p.x=Math.max(30,Math.min(arena.w-30,nx));p.y=Math.max(62,Math.min(arena.h-30,ny));arena.slashes.push({x:p.x,y:p.y,angle:p.angle,t:.3});for(const e of [...arena.enemies]){if(Math.hypot(e.x-p.x,e.y-p.y)<75)damageEnemy(e,cs.atk*2)}burst(p.x,p.y,28,'slash');sfx('slash');toast('LOVE DASH! ✨')}arenaStats()}
 const shopItems=[
  ['⚔️','Crimson Rose Blade','Attack +8',90,'sword','Crimson Rose Blade',()=>arenaState.stats.atk+=8*arenaState.mult],
  ['✨','Soul Edge','Attack +18 • Crit +5%',300,'sword','Soul Edge',()=>{arenaState.stats.atk+=18*arenaState.mult;arenaState.stats.crit+=.05}],

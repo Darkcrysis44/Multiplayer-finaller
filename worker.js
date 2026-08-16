@@ -46,7 +46,7 @@ export class Room {
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,downed:false,reviveProgress:0});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,skillCd:0,skill:'',downed:false,reviveProgress:0});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id),serverAuthoritative:true});
     this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
@@ -74,13 +74,14 @@ export class Room {
       p.ix=clamp(Number(m.x)||0,-1,1);p.iy=clamp(Number(m.y)||0,-1,1);return;
     }
     if(m.type==='attack' && this.phase==='battle' && !p.downed){this.serverAttack(p,m);return;}
+    if(m.type==='skill' && this.phase==='battle' && !p.downed){this.serverSkill(p,m);return;}
     if(m.type==='upgradePick' && this.phase==='upgrade' && this.offer && m.offerId===this.offer.id && !this.picks.has(id)){
       const choice=String(m.choice||'');if(!this.offer.choices.some(c=>c.id===choice))return;
       this.picks.set(id,choice);this.applyUpgrade(p,choice);this.broadcast({type:'upgradeProgress',picked:this.picks.size,total:this.players.size});this.broadcast({type:'upgradePicked',playerId:id,choice});
       if(this.picks.size>=this.players.size){this.phase='countdown';this.wave++;this.spawned=0;this.enemies=[];this.offer=null;this.countdownAt=Date.now()+900;this.broadcast({type:'upgradeReady',wave:this.wave,startAt:this.countdownAt,serverNow:Date.now()});}
     }
   }
-  setStats(p,s){if(!s)return;p.atk=clamp(Number(s.atk)||p.atk,1,10000);p.spd=clamp(Number(s.spd)||p.spd,.5,20);p.maxHp=clamp(Number(s.maxHp)||p.maxHp,20,100000);p.hp=clamp(Number(s.hp)||p.maxHp,1,p.maxHp);p.downed=false;p.reviveProgress=0;p.armor=clamp(Number(s.armor)||p.armor,0,1000);p.crit=clamp(Number(s.crit)||p.crit,0,1)}
+  setStats(p,s){if(!s)return;p.atk=clamp(Number(s.atk)||p.atk,1,10000);p.spd=clamp(Number(s.spd)||p.spd,.5,20);p.maxHp=clamp(Number(s.maxHp)||p.maxHp,20,100000);p.hp=clamp(Number(s.hp)||p.maxHp,1,p.maxHp);p.downed=false;p.reviveProgress=0;p.armor=clamp(Number(s.armor)||p.armor,0,1000);p.crit=clamp(Number(s.crit)||p.crit,0,1);p.skill=String(s.skill||p.skill||'').slice(0,32);p.skillCd=0}
   applyUpgrade(p,c){if(c==='hp'){p.maxHp+=25;p.hp+=25}else if(c==='atk')p.atk+=4;else if(c==='spd')p.spd+=.35;else if(c==='crit')p.crit=clamp(p.crit+.05,0,1);else if(c==='armor')p.armor+=3;else if(c==='heal')p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.35)}
   spawn(){
     const side=Math.floor(Math.random()*4);let x,y;if(side===0){x=Math.random()*WIDTH;y=-40}else if(side===1){x=WIDTH+40;y=Math.random()*HEIGHT}else if(side===2){x=Math.random()*WIDTH;y=HEIGHT+40}else{x=-40;y=Math.random()*HEIGHT}
@@ -88,6 +89,56 @@ export class Room {
     let mult=1+this.wave*.15,hp=(34+this.wave*15)*mult,spd=.55+this.wave*.045+Math.random()*.35,atk=7+this.wave*1.7,r=21;
     if(type==='boss'){hp*=8;spd*=.7;atk*=2.5;r=44}else{const t=TYPES[type]||TYPES.broken;hp*=t[1];spd*=t[2];r=t[3];if(type==='charger')atk*=1.15;if(type==='tank')atk*=1.35;if(type==='duelist')atk*=1.65;if(type==='assassin')atk*=2;if(type==='brute')atk*=1.7;if(type==='lovebreaker')atk*=3;if(type==='berserker')atk*=2.35;if(type==='lancer')atk*=1.9;if(type==='witch')atk*=1.45}
     this.enemies.push({id:'e'+this.nextEnemy++,x,y,hp,maxHp:hp,r,speed:spd,atk,hit:0,attack:.7+Math.random(),type,boss:type==='boss',bossIndex:type==='boss'?Math.floor(this.wave/5)-1:-1,bossDef:type==='boss'?{name:'Broken Heart Lord'}:null,name:type==='boss'?'Broken Heart Lord':(TYPES[type]?.[4]||'Broken Heart'),rarity:type==='boss'?'Legendary':(TYPES[type]?.[5]||'Common')});this.spawned++;
+  }
+  killEnemy(e,owner){
+    if(!e||!this.enemies.some(x=>x.id===e.id))return;
+    const reward=e.boss?80+this.wave*8:3+Math.floor(this.wave*.9);
+    const xp=(e.boss?180:25)+this.wave*6;
+    this.enemies=this.enemies.filter(x=>x.id!==e.id);
+    if(owner)this.send(owner,{type:'reward',reward,xp});
+  }
+  serverSkill(p,m){
+    const now=Date.now();
+    if(p.skillCd>0)return;
+    const skill=String(m.skill||p.skill||'');
+    const angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;
+    p.angle=angle;
+    const stats=p.atk;
+    const defs={nova:{cd:8},dash:{cd:5},barrage:{cd:10},moon:{cd:7},storm:{cd:12}};
+    if(!defs[skill])return;
+    p.skillCd=defs[skill].cd;
+    const hitIds=[];
+    const damage=(e,mult)=>{if(!e||e.hp<=0)return;let d=stats*mult;if(Math.random()<p.crit)d*=2;e.hp=Math.max(0,e.hp-d);e.hit=.12;hitIds.push({id:e.id,damage:d});};
+    if(skill==='nova'){
+      for(const e of this.enemies)if(dist(e,p)<190)damage(e,3);
+      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }else if(skill==='barrage'){
+      for(let j=-2;j<=2;j++){
+        const a=angle+j*.18;
+        for(const e of this.enemies){
+          const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy);
+          let da=Math.atan2(dy,dx)-a;da=Math.atan2(Math.sin(da),Math.cos(da));
+          if(d<165&&Math.abs(da)<.65)damage(e,2.2);
+        }
+      }
+      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }else if(skill==='moon'){
+      const proj={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*7,vy:Math.sin(angle)*7,angle,life:2.2,damage:stats*5,skill:'moon',radius:18};
+      this.projectiles.push(proj);
+      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,projectile:proj,serverNow:now});
+    }else if(skill==='storm'){
+      for(const e of this.enemies)if(dist(e,p)<260)damage(e,2.5);
+      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }else if(skill==='dash'){
+      p.x=clamp(p.x+Math.cos(angle)*180,30,WIDTH-30);p.y=clamp(p.y+Math.sin(angle)*180,62,HEIGHT-30);
+      for(const e of this.enemies)if(dist(e,p)<75)damage(e,2);
+      this.broadcast({type:'skillFx',skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }
+    for(const h of hitIds){
+      const e=this.enemies.find(q=>q.id===h.id);
+      if(e&&e.hp<=0)this.killEnemy(e);
+    }
+    this.broadcastState(true);
   }
   serverAttack(p,m){
     const now=Date.now();if(now-p.lastAttack<500)return;p.lastAttack=now;
@@ -126,7 +177,7 @@ export class Room {
     if(this.phase==='countdown' && now>=this.countdownAt){this.phase='battle';this.broadcast({type:'phase',phase:'battle',wave:this.wave,serverNow:now});}
     if(this.phase!=='battle')return;
     const dt=raw/1000;
-    for(const p of this.players.values()){
+    for(const p of this.players.values()){p.skillCd=Math.max(0,(p.skillCd||0)-raw/1000);
       if(p.downed){p.ix=0;p.iy=0;continue}
       const l=Math.hypot(p.ix,p.iy)||1;p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
     }
@@ -153,16 +204,11 @@ export class Room {
         }
       }
       if(first){
-        // Put the authoritative arrow exactly on the collision point.
         a.x=prevX+stepX*bestT;a.y=prevY+stepY*bestT;
         let dmg=a.damage;if(a.crit)dmg*=2;
         first.hp-=dmg;first.hit=.12;a.hit=true;a.hitX=a.x;a.hitY=a.y;a.life=0;
         this.broadcast({type:'projectileHit',projectileId:a.id,x:a.x,y:a.y,enemyId:first.id,damage:dmg,serverNow:now});
-        if(first.hp<=0){
-          const reward=first.boss?80+this.wave*8:3+Math.floor(this.wave*.9);
-          this.enemies=this.enemies.filter(e=>e.id!==first.id);
-          this.send(a.owner,{type:'reward',reward,xp:(first.boss?180:25)+this.wave*6});
-        }
+        if(first.hp<=0)this.killEnemy(first,a.owner);
       }
     }
     this.projectiles=this.projectiles.filter(a=>a.life>0&&a.x>-100&&a.x<WIDTH+100&&a.y>-100&&a.y<HEIGHT+100);
@@ -206,7 +252,7 @@ export class Room {
     if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',downed:!!p.downed,reviveProgress:p.reviveProgress||0}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',downed:!!q.downed,reviveProgress:q.reviveProgress||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life}))}}
+  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life}))}}
   broadcastState(force=false){
     const now=Date.now();
     if(!force && now-this.lastState<STATE_MS)return;
@@ -214,7 +260,7 @@ export class Room {
     this.stateSeq++;
     for(const id of this.sockets.keys())this.send(id,{type:'state',...this.makeState(this.players.get(id))});
   }
-  broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,weapon:p.weapon||'sword',downed:!!p.downed,reviveProgress:p.reviveProgress||0}))})}
+  broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}))})}
   send(id,msg){const ws=this.sockets.get(id);if(ws)try{ws.send(JSON.stringify(msg))}catch{}}
   broadcast(msg){const d=JSON.stringify(msg);for(const[id,ws]of this.sockets){try{ws.send(d)}catch{this.sockets.delete(id);this.players.delete(id)}}}
 }

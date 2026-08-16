@@ -1,10 +1,10 @@
-# Love Sword Arena — Full Multiplayer Build
+# Love Sword Arena - Multiplayer Skills Synced
 
-Complete package preserved from the revive/restart build, with the combat and bow fixes merged into the same full file set.
+This build keeps the full previous game and adds server-authoritative multiplayer skill synchronization.
 
-- Server-authoritative multiplayer
-- Revive and both-down restart
-- 0.5s attack cooldown / server anti-double-hit
-- Bow projectile visuals
-- Bow does not trigger sword slash visuals
-- Remote weapon state synchronization
+- R skill use is sent to the Cloudflare Durable Object.
+- Server validates skill/cooldown and applies damage.
+- Nova, Rose Barrage, Moon Slash, Heartstorm and Love Dash are synchronized.
+- Moon Slash projectile is authoritative and damages on collision.
+- Skill effects are broadcast to all players.
+- Existing revive, restart, upgrade, sword and bow systems are preserved.
