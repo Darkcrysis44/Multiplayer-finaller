@@ -1,10 +1,8 @@
-# Love Sword Arena - Multiplayer Skills Synced
+# Love Sword Arena — Co-op Contribution Rewards
 
-This build keeps the full previous game and adds server-authoritative multiplayer skill synchronization.
-
-- R skill use is sent to the Cloudflare Durable Object.
-- Server validates skill/cooldown and applies damage.
-- Nova, Rose Barrage, Moon Slash, Heartstorm and Love Dash are synchronized.
-- Moon Slash projectile is authoritative and damages on collision.
-- Skill effects are broadcast to all players.
-- Existing revive, restart, upgrade, sword and bow systems are preserved.
+Multiplayer reward behavior:
+- The player who gets the killing blow receives 100% of the enemy's base currency and XP reward.
+- Every other connected player receives 75% of the same base currency and XP reward.
+- The killer's reward is never reduced because teammates are present.
+- Each player's XP and level progression is processed server-side and sent back as a progression snapshot.
+- Fortune passive, when owned by the receiving player, applies its normal +15% reward bonus after the 100%/75% co-op share.

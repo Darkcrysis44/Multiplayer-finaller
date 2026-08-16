@@ -149,11 +149,32 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
   progression(p){return {level:p.level||1,xp:p.xp||0,rebirths:p.rebirths||0,mult:p.mult||1,progressRev:p.progressRev||0,stats:{maxHp:p.maxHp,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}}}
   killEnemy(e,owner){
     if(!e||!this.enemies.some(x=>x.id===e.id))return;
-    const reward=e.boss?80+this.wave*8:3+Math.floor(this.wave*.9);
-    const xp=(e.boss?180:25)+this.wave*6;
+    const baseReward=e.boss?80+this.wave*8:3+Math.floor(this.wave*.9);
+    const baseXp=(e.boss?180:25)+this.wave*6;
     this.enemies=this.enemies.filter(x=>x.id!==e.id);
-    const p=owner?this.players.get(owner):null;
-    if(p){this.awardXp(p,xp);this.send(owner,{type:'reward',reward,xp,progression:this.progression(p)});}
+
+    // Co-op contribution reward: the killer gets 100%, every other connected
+    // player gets 75% of the same reward. Everyone gains XP/progression too.
+    // The killer's reward is never reduced by the presence of teammates.
+    for(const [id,p] of this.players){
+      const isKiller=id===owner;
+      const ratio=isKiller?1:.75;
+      let reward=baseReward*ratio;
+      const xp=baseXp*ratio;
+      // Fortune belongs to the player receiving the reward, but the 75%
+      // co-op contribution share remains the base share before that bonus.
+      if(p.passives?.includes('fortune')) reward=Math.ceil(reward*1.15);
+      this.awardXp(p,xp);
+      this.send(id,{
+        type:'reward',
+        reward,
+        xp,
+        ratio,
+        killer:isKiller,
+        enemyId:e.id,
+        progression:this.progression(p)
+      });
+    }
   }
   serverSkill(p,m){
     const now=Date.now();
