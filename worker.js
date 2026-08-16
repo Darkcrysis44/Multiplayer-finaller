@@ -12,6 +12,18 @@ const TYPES = {
   brute:[.01,2.7,.38,31,'Heart Brute','Epic'], berserker:[.01,1.35,1.3,24,'Love Berserker','Epic'],
   lovebreaker:[.01,2,.95,27,'Love Breaker','Epic'], witch:[.005,1.05,.5,22,'Heart Witch','Legendary']
 };
+const BOSS_DEFS = [
+  {name:'Heartbreaker',icon:'💔',hp:7,spd:.70,atk:3.4,skill:'dash'},
+  {name:'Rose Colossus',icon:'🌹',hp:11,spd:.42,atk:4.5,skill:'slam'},
+  {name:'Cupid Tyrant',icon:'🏹',hp:8,spd:.58,atk:3.2,skill:'volley'},
+  {name:'Broken Duchess',icon:'👑',hp:6.5,spd:.82,atk:3.0,skill:'summon'},
+  {name:'Grief Knight',icon:'🛡️',hp:9,spd:.62,atk:4.0,skill:'shield'},
+  {name:'Passion Beast',icon:'🔥',hp:8.5,spd:1.05,atk:3.7,skill:'charge'},
+  {name:'Toxic Lover',icon:'☠️',hp:7.5,spd:.72,atk:3.1,skill:'poison'},
+  {name:'Shadow Heart',icon:'🌑',hp:6,spd:1.15,atk:3.0,skill:'blink'},
+  {name:'Love Reaper',icon:'🗡️',hp:10,spd:.76,atk:4.2,skill:'scythe'},
+  {name:'Final Heart',icon:'❤️‍🔥',hp:14,spd:.55,atk:5.0,skill:'nova'}
+];
 const UPGRADE_CHOICES = [
   {id:'hp',icon:'❤️',name:'Vitality',desc:'Max HP +25'}, {id:'atk',icon:'⚔️',name:'Sharpness',desc:'Attack +4'},
   {id:'spd',icon:'💨',name:'Grace',desc:'Speed +0.35'}, {id:'crit',icon:'✨',name:'True Love',desc:'Crit +5%'},
@@ -46,7 +58,7 @@ export class Room {
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,skillCd:0,skill:'',downed:false,reviveProgress:0});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,skillCd:0,skill:'',downed:false,reviveProgress:0,level:1,rebirths:0,mult:1,passives:[]});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id),serverAuthoritative:true});
     this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
@@ -81,14 +93,32 @@ export class Room {
       if(this.picks.size>=this.players.size){this.phase='countdown';this.wave++;this.spawned=0;this.enemies=[];this.offer=null;this.countdownAt=Date.now()+900;this.broadcast({type:'upgradeReady',wave:this.wave,startAt:this.countdownAt,serverNow:Date.now()});}
     }
   }
-  setStats(p,s){if(!s)return;p.atk=clamp(Number(s.atk)||p.atk,1,10000);p.spd=clamp(Number(s.spd)||p.spd,.5,20);p.maxHp=clamp(Number(s.maxHp)||p.maxHp,20,100000);p.hp=clamp(Number(s.hp)||p.maxHp,1,p.maxHp);p.downed=false;p.reviveProgress=0;p.armor=clamp(Number(s.armor)||p.armor,0,1000);p.crit=clamp(Number(s.crit)||p.crit,0,1);p.skill=String(s.skill||p.skill||'').slice(0,32);p.skillCd=0}
+  setStats(p,s){
+    if(!s)return;
+    p.atk=clamp(Number(s.atk)||p.atk,1,10000);
+    p.spd=clamp(Number(s.spd)||p.spd,.5,20);
+    p.maxHp=clamp(Number(s.maxHp)||p.maxHp,20,100000);
+    p.hp=clamp(Number(s.hp)||p.maxHp,1,p.maxHp);
+    p.downed=false;p.reviveProgress=0;
+    p.armor=clamp(Number(s.armor)||p.armor,0,1000);
+    p.crit=clamp(Number(s.crit)||p.crit,0,1);
+    p.skill=String(s.skill||p.skill||'').slice(0,32);p.skillCd=0;
+    p.level=clamp(Number(s.level)||1,1,9999);
+    p.rebirths=clamp(Number(s.rebirths)||0,0,9999);
+    p.mult=clamp(Number(s.mult)||1,1,1000);
+    p.passives=Array.isArray(s.passives)?s.passives.slice(0,32).map(String):[];
+  }
   applyUpgrade(p,c){if(c==='hp'){p.maxHp+=25;p.hp+=25}else if(c==='atk')p.atk+=4;else if(c==='spd')p.spd+=.35;else if(c==='crit')p.crit=clamp(p.crit+.05,0,1);else if(c==='armor')p.armor+=3;else if(c==='heal')p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.35)}
   spawn(){
     const side=Math.floor(Math.random()*4);let x,y;if(side===0){x=Math.random()*WIDTH;y=-40}else if(side===1){x=WIDTH+40;y=Math.random()*HEIGHT}else if(side===2){x=Math.random()*WIDTH;y=HEIGHT+40}else{x=-40;y=Math.random()*HEIGHT}
     let roll=Math.random(),type='broken';if(this.wave%5===0&&this.spawned===0)type='boss';else{let acc=0;for(const[k,v]of Object.entries(TYPES)){acc+=v[0];if(roll<acc){type=k;break}}}
     let mult=1+this.wave*.15,hp=(34+this.wave*15)*mult,spd=.55+this.wave*.045+Math.random()*.35,atk=7+this.wave*1.7,r=21;
-    if(type==='boss'){hp*=8;spd*=.7;atk*=2.5;r=44}else{const t=TYPES[type]||TYPES.broken;hp*=t[1];spd*=t[2];r=t[3];if(type==='charger')atk*=1.15;if(type==='tank')atk*=1.35;if(type==='duelist')atk*=1.65;if(type==='assassin')atk*=2;if(type==='brute')atk*=1.7;if(type==='lovebreaker')atk*=3;if(type==='berserker')atk*=2.35;if(type==='lancer')atk*=1.9;if(type==='witch')atk*=1.45}
-    this.enemies.push({id:'e'+this.nextEnemy++,x,y,hp,maxHp:hp,r,speed:spd,atk,hit:0,attack:.7+Math.random(),type,boss:type==='boss',bossIndex:type==='boss'?Math.floor(this.wave/5)-1:-1,bossDef:type==='boss'?{name:'Broken Heart Lord'}:null,name:type==='boss'?'Broken Heart Lord':(TYPES[type]?.[4]||'Broken Heart'),rarity:type==='boss'?'Legendary':(TYPES[type]?.[5]||'Common')});this.spawned++;
+    if(type==='boss'){
+      const bossDef=BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length];
+      hp*=bossDef.hp;spd*=bossDef.spd;atk*=bossDef.atk;r=44;
+    }else{const t=TYPES[type]||TYPES.broken;hp*=t[1];spd*=t[2];r=t[3];if(type==='charger')atk*=1.15;if(type==='tank')atk*=1.35;if(type==='duelist')atk*=1.65;if(type==='assassin')atk*=2;if(type==='brute')atk*=1.7;if(type==='lovebreaker')atk*=3;if(type==='berserker')atk*=2.35;if(type==='lancer')atk*=1.9;if(type==='witch')atk*=1.45}
+    this.enemies.push({id:'e'+this.nextEnemy++,x,y,hp,maxHp:hp,r,speed:spd,atk,hit:0,attack:.7+Math.random(),type,boss:type==='boss',bossIndex:type==='boss'?Math.floor(this.wave/5)-1:-1,bossDef:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length]:null,
+name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:(TYPES[type]?.[4]||'Broken Heart'),rarity:type==='boss'?'Legendary':(TYPES[type]?.[5]||'Common')});this.spawned++;
   }
   killEnemy(e,owner){
     if(!e||!this.enemies.some(x=>x.id===e.id))return;
@@ -171,7 +201,7 @@ export class Room {
     let hitX=p.x+ca*maxRange,hitY=p.y+sa*maxRange;
     if(best){
       hitX=best.x;hitY=best.y;
-      let dmg=clamp(Number(m.stats?.atk)||p.atk,1,10000);if(Math.random()<p.crit)dmg*=2;
+      let dmg=clamp(Number(m.stats?.atk)||p.atk,1,10000);if(best.shieldT>0)dmg*=.35;if(Math.random()<p.crit)dmg*=2;
       best.hp-=dmg;best.hit=.12;
       if(best.hp<=0){const reward=best.boss?80+this.wave*8:3+Math.floor(this.wave*.9);this.enemies=this.enemies.filter(e=>e.id!==best.id);this.send(p.id,{type:'reward',reward,xp:(best.boss?180:25)+this.wave*6});}
     }
@@ -208,12 +238,26 @@ export class Room {
           first=e;bestT=t;
         }
       }
-      if(first){
+      if(first && a.owner!=='enemy'){
         a.x=prevX+stepX*bestT;a.y=prevY+stepY*bestT;
-        let dmg=a.damage;if(a.crit)dmg*=2;
+        let dmg=a.damage;if(a.crit)dmg*=2;if(first.shieldT>0)dmg*=.35;
         first.hp-=dmg;first.hit=.12;a.hit=true;a.hitX=a.x;a.hitY=a.y;a.life=0;
         this.broadcast({type:'projectileHit',projectileId:a.id,x:a.x,y:a.y,enemyId:first.id,damage:dmg,serverNow:now});
         if(first.hp<=0)this.killEnemy(first,a.owner);
+      }
+    }
+    for(const a of this.projectiles){
+      if(a.owner!=='enemy'||a.life<=0)continue;
+      for(const p of this.players.values()){
+        if(p.downed)continue;
+        const rr=22+(a.radius||8),dx=p.x-a.x,dy=p.y-a.y;
+        if(dx*dx+dy*dy<=rr*rr){
+          const dmg=Math.max(1,a.damage-p.armor*.35);
+          p.hp=Math.max(0,p.hp-dmg);a.life=0;
+          this.broadcast({type:'enemyProjectileHit',projectileId:a.id,playerId:p.id,x:a.x,y:a.y,damage:dmg,serverNow:now});
+          if(p.hp<=0){p.hp=0;p.downed=true;p.ix=p.iy=0;this.broadcast({type:'downed',playerId:p.id,x:p.x,y:p.y})}
+          break;
+        }
       }
     }
     this.projectiles=this.projectiles.filter(a=>a.life>0&&a.x>-100&&a.x<WIDTH+100&&a.y>-100&&a.y<HEIGHT+100);
@@ -244,10 +288,43 @@ export class Room {
       }
     }
     for(const e of this.enemies){
+      if(e.boss){
+        e.specialCd=Math.max(0,(e.specialCd||0)-dt);
+        e.shieldT=Math.max(0,(e.shieldT||0)-dt);
+        if(e.specialCd<=0){
+          const living=[...this.players.values()].filter(p=>!p.downed);
+          if(living.length){
+            let target=living[0],bd=dist(e,target);
+            for(const q of living){const qd=dist(e,q);if(qd<bd){bd=qd;target=q}}
+            const a=Math.atan2(target.y-e.y,target.x-e.x);
+            const sk=e.bossDef?.skill;
+            e.specialCd=2.2+Math.random()*1.5;
+            if(sk==='dash'){e.dashT=.55;e.dashA=a}
+            else if(sk==='charge'){e.chargeT=.65;e.chargeA=a}
+            else if(sk==='blink'){
+              e.x=clamp(target.x-Math.cos(a)*150,60,WIDTH-60);e.y=clamp(target.y-Math.sin(a)*150,90,HEIGHT-60);
+              this.broadcast({type:'bossFx',kind:'blink',enemyId:e.id,x:e.x,y:e.y});
+            } else if(sk==='slam'){
+              if(bd<210){target.hp=Math.max(0,target.hp-Math.max(1,e.atk*1.6));if(target.hp<=0){target.hp=0;target.downed=true;target.ix=target.iy=0;this.broadcast({type:'downed',playerId:target.id,x:target.x,y:target.y})}}
+              this.broadcast({type:'bossFx',kind:'slam',enemyId:e.id,x:e.x,y:e.y});
+            } else if(sk==='shield'){e.shieldT=1.2;this.broadcast({type:'bossFx',kind:'shield',enemyId:e.id,x:e.x,y:e.y})}
+            else if(sk==='summon'){for(let i=0;i<2;i++)this.spawn();this.broadcast({type:'bossFx',kind:'summon',enemyId:e.id,x:e.x,y:e.y})}
+            else if(sk==='volley'||sk==='scythe'||sk==='nova'){
+              const count=sk==='volley'?7:5, speed=sk==='scythe'?5.8:4.7;
+              for(let j=0;j<count;j++){const aa=a+(j-(count-1)/2)*.18;this.projectiles.push({id:'b'+(++this.attackSeq),owner:'enemy',source:e.id,x:e.x,y:e.y,vx:Math.cos(aa)*speed,vy:Math.sin(aa)*speed,angle:aa,life:2.5,damage:e.atk*.45,radius:8,crit:false});}
+              this.broadcast({type:'bossFx',kind:'volley',enemyId:e.id,x:e.x,y:e.y});
+            } else if(sk==='poison'){
+              this.projectiles.push({id:'b'+(++this.attackSeq),owner:'enemy',source:e.id,x:e.x,y:e.y,vx:Math.cos(a)*3.8,vy:Math.sin(a)*3.8,angle:a,life:2.8,damage:e.atk*.65,radius:10,crit:false,poison:true});
+            }
+          }
+        }
+        if(e.dashT>0){e.dashT-=dt;e.x+=Math.cos(e.dashA)*7*60*dt;e.y+=Math.sin(e.dashA)*7*60*dt}
+        else if(e.chargeT>0){e.chargeT-=dt;e.x+=Math.cos(e.chargeA)*8*60*dt;e.y+=Math.sin(e.chargeA)*8*60*dt}
+      }
       let target=null,bd=Infinity;for(const p of this.players.values()){if(p.downed)continue;const d=dist(e,p);if(d<bd){bd=d;target=p}}
       if(!target)continue;
       const dx=target.x-e.x,dy=target.y-e.y,d=Math.hypot(dx,dy)||1,contact=e.boss?72:46;
-      if(d>contact){e.x+=dx/d*e.speed*60*dt;e.y+=dy/d*e.speed*60*dt}
+      if(!e.dashT&&!e.chargeT&&d>contact){e.x+=dx/d*e.speed*60*dt;e.y+=dy/d*e.speed*60*dt}
       else{e.attack-=dt;if(e.attack<=0){e.attack=e.boss?1.5:.9;const dmg=Math.max(1,e.atk-target.armor*.7);target.hp=Math.max(0,target.hp-dmg);if(target.hp<=0){target.hp=0;target.downed=true;target.reviveProgress=0;target.ix=0;target.iy=0;this.broadcast({type:'downed',playerId:target.id,x:target.x,y:target.y})}}}
       e.x=clamp(e.x,-60,WIDTH+60);e.y=clamp(e.y,-60,HEIGHT+60);e.hit=Math.max(0,e.hit-dt);
     }
@@ -257,7 +334,7 @@ export class Room {
     if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life}))}}
+  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,rebirths:q.rebirths||0,mult:q.mult||1})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life}))}}
   broadcastState(force=false){
     const now=Date.now();
     if(!force && now-this.lastState<STATE_MS)return;

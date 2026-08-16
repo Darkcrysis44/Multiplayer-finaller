@@ -962,7 +962,15 @@ function coopConnect(){
   coopSocket.onerror=()=>coopSetStatus('⚠️ Connection error');
   coopSocket.onmessage=e=>{try{coopHandle(JSON.parse(e.data))}catch(err){console.error(err)}};
 }
-function coopStats(){const c=coopServerStats||combatStats();return {atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:arena.player.hp,skill:(arenaState.skills[0]?.id||'')}}
+function coopStats(){
+  const c=combatStats();
+  return {
+    atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:Math.min(arena.player.hp,c.maxHp),
+    skill:(arenaState.skills[0]?.id||''),
+    level:Number(arenaState.level||1),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),
+    passives:Array.isArray(arenaState.passives)?arenaState.passives.slice(0,32):[]
+  };
+}
 function coopSend(msg){if(coopSocket&&coopSocket.readyState===1)coopSocket.send(JSON.stringify(msg))}
 function applyUpgradeChoice(choice){
   const map={hp:'hp',atk:'atk',spd:'spd',crit:'crit',armor:'armor',heal:'heal'};
