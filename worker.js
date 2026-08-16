@@ -46,29 +46,17 @@ export class Room {
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,lastAttack:0,lastInputAt:Date.now()});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id)});
-    this.broadcastPlayers(); await this.ensureAlarm();
+    this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
     const cleanup=()=>{this.sockets.delete(id);this.players.delete(id);this.picks.delete(id);this.broadcastPlayers();if(this.players.size===0){this.resetRoom();}};
     server.addEventListener('message',onMessage); server.addEventListener('close',cleanup); server.addEventListener('error',cleanup);
     return new Response(null,{status:101,webSocket:client});
   }
   resetRoom(){this.phase='lobby';this.wave=1;this.enemies=[];this.spawned=0;this.offer=null;this.picks.clear();this.countdownAt=0;}
-  async ensureAlarm(){
-    if(this.sockets.size===0)return;
-    const existing=await this.state.storage.getAlarm().catch(()=>null);
-    if(existing!==null)return;
-    this.nextTickAlarm=Date.now()+TICK_MS;
-    try{await this.state.storage.setAlarm(this.nextTickAlarm)}
-    catch{this.nextTickAlarm=null}
-  }
-  async alarm(){
-    this.nextTickAlarm=null;
-    const now=Date.now();
-    try{this.tick(now)}
-    finally{if(this.sockets.size)await this.ensureAlarm()}
-  }
+  async ensureAlarm(){if(this.nextTickAlarm)return;this.nextTickAlarm=Date.now()+TICK_MS;try{await this.state.storage.setAlarm(this.nextTickAlarm)}catch{this.nextTickAlarm=null}}
+  async alarm(){this.nextTickAlarm=null;const now=Date.now();this.tick(now);if(this.sockets.size)await this.ensureAlarm()}
   message(id,m){const p=this.players.get(id);if(!p)return;
     if(m.type==='join'){p.name=String(m.name||'Player').slice(0,20)||'Player';this.setStats(p,m.stats);this.broadcastPlayers();return;}
     if(m.type==='startRequest' && this.phase==='lobby' && this.players.size>=1){
@@ -76,7 +64,7 @@ export class Room {
       this.broadcast({type:'serverStart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
     }
     if(m.type==='input' && (this.phase==='battle'||this.phase==='countdown')){
-      p.ix=clamp(Number(m.x)||0,-1,1);p.iy=clamp(Number(m.y)||0,-1,1);p.angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;return;
+      p.ix=clamp(Number(m.x)||0,-1,1);p.iy=clamp(Number(m.y)||0,-1,1);p.angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;p.lastInputAt=Date.now();return;
     }
     if(m.type==='attack' && this.phase==='battle'){this.serverAttack(p,m);return;}
     if(m.type==='upgradePick' && this.phase==='upgrade' && this.offer && m.offerId===this.offer.id && !this.picks.has(id)){
@@ -106,7 +94,12 @@ export class Room {
     if(this.phase!=='battle')return;
     const dt=raw/1000;
     for(const p of this.players.values()){
-      const l=Math.hypot(p.ix,p.iy)||1;p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
+      // Browsers throttle background tabs. Never keep applying an old movement
+      // command while a client is asleep or disconnected.
+      if(now-(p.lastInputAt||0)>450){p.ix=0;p.iy=0}
+      const l=Math.hypot(p.ix,p.iy)||1;
+      p.x=clamp(p.x+p.ix/l*p.spd*60*dt,30,WIDTH-30);
+      p.y=clamp(p.y+p.iy/l*p.spd*60*dt,62,HEIGHT-30);
     }
     for(const e of this.enemies){
       let target=null,bd=Infinity;for(const p of this.players.values()){const d=dist(e,p);if(d<bd){bd=d;target=p}}if(!target)continue;

@@ -1,16 +1,26 @@
-# Love Sword Arena — Server Authoritative Co-op
+# Love Sword Arena — Cloudflare Server-Authoritative Co-op
 
-This build keeps the existing game and moves the online battle simulation to the Cloudflare Durable Object.
+This archive is based on the original game build and preserves the existing game UI, single-player combat, progression, shop and assets.
+
+## Multiplayer architecture
+
+Cloudflare Durable Objects own the live room:
+- player positions and HP
+- enemy spawning and movement
+- waves and upgrade phase
+- attack validation and damage
+- authoritative 20 Hz game tick
+- 10 Hz state snapshots
+
+Clients send only input/intent and render the server state.
 
 ## Important fixes
-- The co-op runtime/render loop is started when the server starts the battle.
-- WASD / arrow input is continuously sent to the Cloudflare server.
-- The server owns player positions, enemies, waves, damage, attacks and upgrades.
-- Cloudflare Durable Object alarms drive the authoritative game tick.
-- Alarm scheduling checks Durable Object storage, so a stale in-memory flag cannot stop the server loop.
-- Returning from an inactive/background tab immediately resends current input.
-- A lost WebSocket reconnects while the co-op arena is still open.
-- Backgrounded clients cannot leave stale movement input running forever.
+- Co-op render/input loop starts immediately when the room connects (the previous build could show a static arena).
+- Server movement stops after 450 ms without an input packet, so a backgrounded tab cannot keep moving forever.
+- Returning to a tab immediately sends current input and resumes rendering.
+- Unexpected WebSocket loss triggers a reconnect.
+- Closing/leaving the game disables reconnect.
+- The original game files and assets are retained.
 
 ## Deploy
-Upload the contents of this archive to the GitHub repository and let the connected Cloudflare Worker deployment build it.
+Replace the repository files with this archive's contents and deploy the Worker.
