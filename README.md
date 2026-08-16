@@ -1,7 +1,10 @@
-# Love Sword Arena — Co-op Combat Fix
+# Love Sword Arena — Full Multiplayer Build
 
-- Fixed the co-op attack animation appearing twice for the attacking player.
-- The server's attack FX echo is now ignored by the originating client because that client already renders its attack instantly.
-- Attack cooldown is checked before any local swing/FX is created, so rapid clicks cannot create extra local swings.
-- Kept the 0.5 second server/client attack cooldown.
-- Other players still receive the server-confirmed attack FX normally.
+Complete package preserved from the revive/restart build, with the combat and bow fixes merged into the same full file set.
+
+- Server-authoritative multiplayer
+- Revive and both-down restart
+- 0.5s attack cooldown / server anti-double-hit
+- Bow projectile visuals
+- Bow does not trigger sword slash visuals
+- Remote weapon state synchronization
