@@ -59,6 +59,11 @@ export class Room {
   async alarm(){this.nextTickAlarm=null;const now=Date.now();this.tick(now);if(this.sockets.size)await this.ensureAlarm()}
   message(id,m){const p=this.players.get(id);if(!p)return;
     if(m.type==='join'){p.name=String(m.name||'Player').slice(0,20)||'Player';this.setStats(p,m.stats);this.broadcastPlayers();return;}
+    if(m.type==='restartRequest' && this.phase==='gameover' && this.players.size>=1){
+      this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+1200;
+      for(const q of this.players.values()){q.x=WIDTH/2;q.y=HEIGHT/2;q.hp=q.maxHp;q.downed=false;q.reviveProgress=0;q.ix=0;q.iy=0;q.lastAttack=0}
+      this.broadcast({type:'serverRestart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
+    }
     if(m.type==='startRequest' && this.phase==='lobby' && this.players.size>=1){
       this.setStats(p,m.stats);this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+2000;
       this.broadcast({type:'serverStart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
@@ -85,7 +90,7 @@ export class Room {
     this.enemies.push({id:'e'+this.nextEnemy++,x,y,hp,maxHp:hp,r,speed:spd,atk,hit:0,attack:.7+Math.random(),type,boss:type==='boss',bossIndex:type==='boss'?Math.floor(this.wave/5)-1:-1,bossDef:type==='boss'?{name:'Broken Heart Lord'}:null,name:type==='boss'?'Broken Heart Lord':(TYPES[type]?.[4]||'Broken Heart'),rarity:type==='boss'?'Legendary':(TYPES[type]?.[5]||'Common')});this.spawned++;
   }
   serverAttack(p,m){
-    const now=Date.now();if(now-p.lastAttack<120)return;p.lastAttack=now;
+    const now=Date.now();if(now-p.lastAttack<500)return;p.lastAttack=now;
     const angle=Number(m.angle)||p.angle;let best=null,bestD=Infinity;for(const e of this.enemies){const d=Math.hypot(e.x-p.x,e.y-p.y);const range=m.weapon==='bow'?220:125;if(d>range)continue;let da=Math.atan2(e.y-p.y,e.x-p.x)-angle;da=Math.atan2(Math.sin(da),Math.cos(da));if(Math.abs(da)<(m.weapon==='bow'?.45:.95)&&d<bestD){best=e;bestD=d}}
     if(best){let dmg=clamp(Number(m.stats?.atk)||p.atk,1,10000);if(Math.random()<p.crit)dmg*=2;best.hp-=dmg;best.hit=.12;if(best.hp<=0){const reward=best.boss?80+this.wave*8:3+Math.floor(this.wave*.9);this.enemies=this.enemies.filter(e=>e.id!==best.id);this.send(p.id,{type:'reward',reward,xp:(best.boss?180:25)+this.wave*6});}}
     this.broadcast({type:'fx',kind:'attack',attackId:++this.attackSeq,from:p.id,x:p.x,y:p.y,angle,weapon:m.weapon,serverNow:now});
@@ -113,6 +118,16 @@ export class Room {
           this.broadcast({type:'revive',playerId:p.id,reviverId:rescuer.id,x:p.x,y:p.y});
         }
       }else p.reviveProgress=Math.max(0,p.reviveProgress-dt*2);
+    }
+    if(this.phase==='battle' && this.players.size>0){
+      let alive=0;for(const q of this.players.values())if(!q.downed)alive++;
+      if(alive===0){
+        this.phase='gameover';
+        this.enemies=[];this.spawned=0;this.picks.clear();this.offer=null;
+        this.broadcast({type:'gameOver',reason:'allDowned',serverNow:Date.now()});
+        this.broadcastState(true);
+        return;
+      }
     }
     for(const e of this.enemies){
       let target=null,bd=Infinity;for(const p of this.players.values()){if(p.downed)continue;const d=dist(e,p);if(d<bd){bd=d;target=p}}

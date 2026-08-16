@@ -1011,13 +1011,15 @@ function coopHandle(m){
   if(m.type==='phase'){
     coopServerPhase=m.phase||coopServerPhase;
     if(m.phase==='battle'){coopStarted=true;arena.running=true;$('lsaUpgrade').classList.add('hidden');showCoopStart(false);arenaLog('⚔️ Server battle is live.');}
+    else if(m.phase==='gameover'){coopStarted=false;arena.running=false;showCoopStart(true);const b=$('coopStartBattle');if(b)b.textContent='↻ RESTART RUN';const t=$('coopStartText');if(t)t.textContent='Both players are down. Restart the co-op run?';}
     updateCoopLobby(); return;
   }
   if(m.type==='state'){
     if(m.serverNow)coopClockOffset=(m.serverNow-Date.now())*.2+coopClockOffset*.8;
     coopServerPhase=m.phase||coopServerPhase; coopApplyState(m);
-    if(m.phase==='battle'){coopStarted=true;arena.running=true;$('lsaUpgrade').classList.add('hidden');showCoopStart(false)}
+    if(m.phase==='battle'){coopStarted=true;arena.running=true;$('lsaUpgrade').classList.add('hidden');showCoopStart(false);const b=$('coopStartBattle');if(b)b.textContent='▶ START BATTLE'}
     else if(m.phase==='upgrade'){arena.running=false}
+    else if(m.phase==='gameover'){coopStarted=false;arena.running=false;showCoopStart(true);const b=$('coopStartBattle');if(b)b.textContent='↻ RESTART RUN';const t=$('coopStartText');if(t)t.textContent='Both players are down. Restart the co-op run?';}
     updateCoopLobby(); return;
   }
   if(m.type==='downed'){if(m.playerId===coopId){arena.player.downed=true;arena.player.reviveProgress=0;coopSetStatus('💚 DOWNED — another player can revive you');}burst(m.x,m.y,24,'death');sfx('hurt');return}
@@ -1105,17 +1107,21 @@ function coopClientVisualTick(dt){
 }
 function coopTick(){if(!coopSocket||coopSocket.readyState!==1)return;const p=arena.player,now=performance.now();if(now-coopLastNet>50){coopLastNet=now;const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0),dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);coopInput={x:dx,y:dy};coopSend({type:'input',x:dx,y:dy,angle:p.angle||0})}}
 function showCoopStart(show){const el=$('coopStartOverlay');if(el)el.classList.toggle('hidden',!show);if(show)updateCoopLobby()}
-function updateCoopLobby(){const total=Object.keys(coopPeers).length+(coopId?1:0),st=$('coopStartStatus'),btn=$('coopStartBattle'),txt=$('coopStartText');if(st)st.textContent=coopServerPhase==='battle'?'⚔️ Battle running • '+total+' players':coopServerPhase==='upgrade'?'✨ Everyone is choosing an upgrade':'🟢 Server room • '+total+' player'+(total===1?'':'s');if(btn){btn.disabled=!coopSocket||coopSocket.readyState!==1||coopServerPhase!=='lobby';btn.textContent=coopServerPhase==='lobby'?'▶ START BATTLE':'⚔️ BATTLE RUNNING'}if(txt)txt.textContent='Cloudflare server controls the battle clock, enemies, waves and upgrades. No player is the host.'}
+function updateCoopLobby(){const total=Object.keys(coopPeers).length+(coopId?1:0),st=$('coopStartStatus'),btn=$('coopStartBattle'),txt=$('coopStartText');if(st)st.textContent=coopServerPhase==='battle'?'⚔️ Battle running • '+total+' players':coopServerPhase==='upgrade'?'✨ Everyone is choosing an upgrade':'🟢 Server room • '+total+' player'+(total===1?'':'s');if(btn){btn.disabled=!coopSocket||coopSocket.readyState!==1||!(coopServerPhase==='lobby'||coopServerPhase==='gameover');btn.textContent=coopServerPhase==='gameover'?'↻ RESTART RUN':(coopServerPhase==='lobby'?'▶ START BATTLE':'⚔️ BATTLE RUNNING')}if(txt)txt.textContent='Cloudflare server controls the battle clock, enemies, waves and upgrades. No player is the host.'}
 function resetArenaRun(){arena.running=false;arena.wave=1;arena.spawned=0;arena.enemies=[];arena.projectiles=[];arena.particles=[];arena.slashes=[];resetWaveUpgrades();arena.player={x:0,y:0,targetX:0,targetY:0,hp:combatStats().maxHp,dir:1,angle:0,attackCd:0,slashT:0,inv:0,skillCd:0};resizeArena();arenaStats()}
 function beginCoopBattle(announce=true){if(arenaModal.classList.contains('hidden'))arenaModal.classList.remove('hidden');$('coopModal').classList.add('hidden');showCoopStart(false);arena.running=true;initArenaAudio();arenaStats();arenaLog('⚔️ Cloudflare server is running the battle.');if(announce)coopSend({type:'startRequest',stats:coopStats()})}
 function coopStart(){coopStarted=false;coopServerPhase='lobby';coopServerStats=null;coopLastServerSeq=0;coopLastServerAt=0;coopServerX=0;coopServerY=0;clearTimeout(coopStartTimer);resetArenaRun();showCoopStart(true);updateCoopLobby();coopConnect()}
 $('lsaCoopBtn').onclick=()=>{coopOpenedFromRunning=!!arena.running;arena.running=false;$('coopModal').classList.remove('hidden');showCoopStart(false);coopSetStatus('Offline');updateCoopLobby()};
 $('coopClose').onclick=()=>{$('coopModal').classList.add('hidden');arena.running=false;showCoopStart(false);coopOpenedFromRunning=false};
 $('coopHost').onclick=()=>coopStart();$('coopJoin').onclick=()=>coopStart();$('coopRandom').onclick=()=>{$('coopRoom').value=Math.random().toString(36).slice(2,8).toUpperCase()};
-$('coopStartBattle').onclick=()=>{if(coopSocket&&coopSocket.readyState===1&&coopServerPhase==='lobby'){coopSend({type:'startRequest',stats:coopStats()})}};
+$('coopStartBattle').onclick=()=>{
+  if(!coopSocket||coopSocket.readyState!==1)return;
+  if(coopServerPhase==='gameover'){coopSend({type:'restartRequest',stats:coopStats()});return}
+  if(coopServerPhase==='lobby')coopSend({type:'startRequest',stats:coopStats()});
+};
 const originalSlash=slash;
 slash=function(angle){
-  if(coopSocket&&coopSocket.readyState===1&&coopStarted){arena.player.angle=angle;arena.player.slashT=.22;arena.player.attackCd=.27;arena.slashes.push({x:arena.player.x,y:arena.player.y,angle,t:.22,remote:false});burst(arena.player.x+Math.cos(angle)*35,arena.player.y+Math.sin(angle)*35,7,'slash');sfx('slash');coopSend({type:'attack',angle,weapon:arenaState.activeWeaponType==='bow'?'bow':'sword',stats:coopStats()});return}originalSlash(angle)};
+  if(coopSocket&&coopSocket.readyState===1&&coopStarted){arena.player.angle=angle;arena.player.slashT=.22;if(arena.player.attackCd>0)return;arena.player.attackCd=.5;arena.slashes.push({x:arena.player.x,y:arena.player.y,angle,t:.22,remote:false});burst(arena.player.x+Math.cos(angle)*35,arena.player.y+Math.sin(angle)*35,7,'slash');sfx('slash');coopSend({type:'attack',angle,weapon:arenaState.activeWeaponType==='bow'?'bow':'sword',stats:coopStats()});return}originalSlash(angle)};
 let arenaSimTimer=null,arenaSimLast=0,arenaSimAccum=0;
 function arenaSimulationTick(now){if(!arena.running){arenaSimLast=now;arenaSimAccum=0;return}if(!arenaSimLast)arenaSimLast=now;let elapsed=Math.max(0,Math.min(2.5,(now-arenaSimLast)/1000));arenaSimLast=now;arenaSimAccum+=elapsed;const step=1/60;let steps=0;while(arenaSimAccum>=step&&steps<150){if(coopSocket&&coopSocket.readyState===1){coopTick();coopClientVisualTick(step)}else updateArena(step);arenaSimAccum-=step;steps++}if(steps>=150)arenaSimAccum=0}
 function arenaRenderLoop(){drawArena();if(arenaModal&&!arenaModal.classList.contains('hidden'))requestAnimationFrame(arenaRenderLoop)}
