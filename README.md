@@ -34,3 +34,12 @@ The Worker name is `multiplayer-game1` to match the existing Cloudflare project.
 - Fixed the 10 Hz authoritative state broadcast bug that suppressed normal snapshots.
 - Co-op local player rendering now interpolates toward authoritative server positions between snapshots.
 - Server remains authoritative for movement, enemy AI, HP, damage, waves and upgrades.
+
+
+## Multiplayer update
+- Server-authoritative downed/revive system: a downed player remains down until another living player stays within revive range for 2 seconds.
+- Green transparent revive ring and progress indicator are rendered around downed players.
+- Downed players cannot move or attack and enemies prioritize living players.
+- Revived players return at 35% HP with brief invulnerability.
+- Co-op state snapshots include downed/revive state.
+- Server attack cooldown reduced for more responsive combat while keeping damage authoritative.
