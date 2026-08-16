@@ -92,9 +92,27 @@ export class Room {
   serverAttack(p,m){
     const now=Date.now();if(now-p.lastAttack<500)return;p.lastAttack=now;
     const weapon=m.weapon==='bow'?'bow':'sword';p.weapon=weapon;
-    const angle=Number(m.angle)||p.angle;let best=null,bestD=Infinity;for(const e of this.enemies){const d=Math.hypot(e.x-p.x,e.y-p.y);const range=m.weapon==='bow'?220:125;if(d>range)continue;let da=Math.atan2(e.y-p.y,e.x-p.x)-angle;da=Math.atan2(Math.sin(da),Math.cos(da));if(Math.abs(da)<(m.weapon==='bow'?.45:.95)&&d<bestD){best=e;bestD=d}}
-    if(best){let dmg=clamp(Number(m.stats?.atk)||p.atk,1,10000);if(Math.random()<p.crit)dmg*=2;best.hp-=dmg;best.hit=.12;if(best.hp<=0){const reward=best.boss?80+this.wave*8:3+Math.floor(this.wave*.9);this.enemies=this.enemies.filter(e=>e.id!==best.id);this.send(p.id,{type:'reward',reward,xp:(best.boss?180:25)+this.wave*6});}}
-    this.broadcast({type:'fx',kind:'attack',attackId:++this.attackSeq,from:p.id,x:p.x,y:p.y,angle,weapon,serverNow:now});
+    const angle=Number(m.angle)||p.angle;
+    let best=null,bestAlong=Infinity;
+    const maxRange=weapon==='bow'?520:125;
+    const hitWidth=weapon==='bow'?16:52;
+    const ca=Math.cos(angle),sa=Math.sin(angle);
+    for(const e of this.enemies){
+      const rx=e.x-p.x, ry=e.y-p.y;
+      const along=rx*ca+ry*sa;
+      if(along<0||along>maxRange)continue;
+      const side=Math.abs(-rx*sa+ry*ca);
+      const radius=(e.r||20)+hitWidth;
+      if(side>radius)continue;
+      if(along<bestAlong){best=e;bestAlong=along}
+    }
+    let hitX=p.x+ca*Math.min(bestAlong,520),hitY=p.y+sa*Math.min(bestAlong,520);
+    if(best){
+      hitX=best.x;hitY=best.y;
+      let dmg=clamp(Number(m.stats?.atk)||p.atk,1,10000);if(Math.random()<p.crit)dmg*=2;best.hp-=dmg;best.hit=.12;
+      if(best.hp<=0){const reward=best.boss?80+this.wave*8:3+Math.floor(this.wave*.9);this.enemies=this.enemies.filter(e=>e.id!==best.id);this.send(p.id,{type:'reward',reward,xp:(best.boss?180:25)+this.wave*6});}
+    }
+    this.broadcast({type:'fx',kind:'attack',attackId:++this.attackSeq,from:p.id,x:p.x,y:p.y,angle,weapon,hit:!!best,hitX,hitY,serverNow:now});
   }
   tick(now){
     const raw=Math.max(0,Math.min(250,now-this.lastTick));this.lastTick=now;

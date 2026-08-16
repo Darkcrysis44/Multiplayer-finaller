@@ -911,7 +911,7 @@ function drawPlayer(p){
    ac.globalAlpha=1;ac.fillStyle='#6dffad';ac.font='bold 11px Arial';ac.textAlign='center';ac.fillText(prog>0?'REVIVING '+Math.ceil(2-(p.reviveProgress||0))+'s':'DOWNED',0,-60);
    ac.restore();return;
  }
- if(p.inv>0&&Math.floor(p.inv*20)%2===0)ac.globalAlpha=.45;ac.fillStyle='#ffafc2';ac.shadowColor='#ff5f89';ac.shadowBlur=18;ac.beginPath();ac.arc(0,-20,11,0,7);ac.fill();ac.fillStyle='#f4d9df';ac.shadowBlur=0;ac.fillRect(-10,-8,20,30);ac.fillStyle='#7d3550';ac.fillRect(-10,22,7,19);ac.fillRect(3,22,7,19);ac.fillStyle='#160911';ac.fillRect(-28,-48,56,6);ac.fillStyle='#ff6f91';ac.fillRect(-28,-48,56*Math.max(0,p.hp/combatStats().maxHp),6);ac.strokeStyle='#ffd8e2';ac.lineWidth=1;ac.strokeRect(-28,-48,56,6);const a=p.angle;ac.save();ac.rotate(a);ac.strokeStyle='#f2b7c7';ac.lineWidth=5;ac.lineCap='round';ac.beginPath();ac.moveTo(5,-4);ac.lineTo(17,-1);ac.stroke();if(arenaState.activeWeaponType==='bow'){ac.strokeStyle='#d9a9bc';ac.lineWidth=3;ac.beginPath();ac.arc(27,0,20,-1.1,1.1);ac.stroke();ac.strokeStyle='#fff0f5';ac.lineWidth=2;ac.beginPath();ac.moveTo(7,0);ac.lineTo(48,0);ac.stroke()}else{ac.strokeStyle='#fff0f5';ac.lineWidth=4;ac.beginPath();ac.moveTo(7,0);ac.lineTo(48,0);ac.stroke();ac.strokeStyle='#ffb8c9';ac.lineWidth=2;ac.beginPath();ac.moveTo(43,0);ac.lineTo(52,0);ac.stroke()}ac.restore();ac.fillStyle='#ff6e95';ac.beginPath();ac.moveTo(-7,-25);ac.quadraticCurveTo(0,-35,7,-25);ac.fill();ac.restore()}
+ if(p.inv>0&&Math.floor(p.inv*20)%2===0)ac.globalAlpha=.45;ac.fillStyle='#ffafc2';ac.shadowColor='#ff5f89';ac.shadowBlur=18;ac.beginPath();ac.arc(0,-20,11,0,7);ac.fill();ac.fillStyle='#f4d9df';ac.shadowBlur=0;ac.fillRect(-10,-8,20,30);ac.fillStyle='#7d3550';ac.fillRect(-10,22,7,19);ac.fillRect(3,22,7,19);ac.fillStyle='#160911';ac.fillRect(-28,-48,56,6);ac.fillStyle='#ff6f91';ac.fillRect(-28,-48,56*Math.max(0,p.hp/combatStats().maxHp),6);ac.strokeStyle='#ffd8e2';ac.lineWidth=1;ac.strokeRect(-28,-48,56,6);const a=(p.slashT>0&&Number.isFinite(p.attackAngle))?p.attackAngle:p.angle;ac.save();ac.rotate(a);ac.strokeStyle='#f2b7c7';ac.lineWidth=5;ac.lineCap='round';ac.beginPath();ac.moveTo(5,-4);ac.lineTo(18,-1);ac.stroke();if(arenaState.activeWeaponType==='bow'){ac.strokeStyle='#d9a9bc';ac.lineWidth=3;ac.beginPath();ac.arc(27,0,20,-1.1,1.1);ac.stroke();ac.strokeStyle='#fff0f5';ac.lineWidth=2;ac.beginPath();ac.moveTo(7,0);ac.lineTo(48,0);ac.stroke()}else{ac.strokeStyle='#fff0f5';ac.lineWidth=4;ac.beginPath();ac.moveTo(7,0);ac.lineTo(48,0);ac.stroke();ac.strokeStyle='#ffb8c9';ac.lineWidth=2;ac.beginPath();ac.moveTo(43,0);ac.lineTo(52,0);ac.stroke()}ac.restore();ac.fillStyle='#ff6e95';ac.beginPath();ac.moveTo(-7,-25);ac.quadraticCurveTo(0,-35,7,-25);ac.fill();ac.restore()}
 function drawEnemy(e){
  ac.save();ac.translate(e.x,e.y);const pulse=Math.sin(performance.now()/170+e.x)*1.8;ac.globalAlpha=e.hit>0?.55:1;
  const boss=e.boss;let body='#7f243d',head='#e45b78',glow='#ff4d73';
@@ -978,6 +978,18 @@ function applyUpgradeChoice(choice){
 }
 function showUpgrade(choices,online=false){
   const wrap=$('lsaUpgrade'),grid=$('lsaUpgradeGrid'); if(!wrap||!grid)return;
+  if(!choices||!choices.length){
+    const pool=[
+      {id:'atk',icon:'⚔️',name:'Sharp Heart',desc:'Attack +4'},
+      {id:'hp',icon:'❤️',name:'Loving Vitality',desc:'Max HP +25'},
+      {id:'spd',icon:'💨',name:'Swift Heart',desc:'Speed +0.35'},
+      {id:'crit',icon:'💥',name:'Critical Kiss',desc:'Critical chance +5%'},
+      {id:'armor',icon:'🛡️',name:'Heart Guard',desc:'Armor +3'},
+      {id:'heal',icon:'💚',name:'Heart Mend',desc:'Restore 35% max HP'}
+    ];
+    const shuffled=pool.sort(()=>Math.random()-.5);
+    choices=shuffled.slice(0,3);
+  }
   grid.innerHTML=''; wrap.classList.remove('hidden');
   (choices||[]).forEach(c=>{
     const item=document.createElement('div');item.className='lsa-item';
@@ -1026,15 +1038,20 @@ function coopHandle(m){
   if(m.type==='revive'){if(m.playerId===coopId){arena.player.downed=false;arena.player.reviveProgress=0;coopSetStatus('💚 Revived!');}burst(m.x,m.y,34,'level');sfx('level');return}
   if(m.type==='reward'){if(m.reward)addArenaMoney(Number(m.reward)||0);if(m.xp)gainXp(Number(m.xp)||0);return;}
   if(m.type==='fx'){
+    if(m.kind==='attack' && m.weapon==='bow' && m.from===coopId){
+      const q=[...arena.projectiles].reverse().find(x=>x.owner==='coopArrow');
+      if(q&&m.hit)q.hit={x:m.hitX,y:m.hitY};
+    }
     if(m.kind==='attack' && m.from!==coopId){
       const p=coopPeers[m.from];
       const a=m.angle||0;
-      if(p){p.slashT=m.weapon==='bow'?0:.22;p.angle=a;p.weapon=m.weapon||'sword'}
+      if(p){p.slashT=m.weapon==='bow'?0:.22;p.angle=a;p.attackAngle=a;p.weapon=m.weapon||'sword'}
       if(m.weapon==='bow'){
         arena.projectiles.push({
           x:m.x+Math.cos(a)*20,y:m.y+Math.sin(a)*20,
           vx:Math.cos(a)*8.5,vy:Math.sin(a)*8.5,
-          life:1.6,damage:0,angle:a,owner:'remoteArrow',kind:'playerArrow'
+          life:1.6,damage:0,angle:a,owner:'remoteArrow',kind:'playerArrow',
+          hit:m.hit?{x:m.hitX,y:m.hitY}:null
         });
         burst(m.x+Math.cos(a)*18,m.y+Math.sin(a)*18,3,'arrow');
         sfx('bow');
@@ -1098,7 +1115,7 @@ function coopDrawPlayers(){if(!coopSocket)return;for(const p of Object.values(co
     ac.restore();continue;
   }
   ac.shadowColor='#ff9fbd';ac.shadowBlur=20;ac.fillStyle='#ff6f9a';ac.beginPath();ac.arc(0,-18,11,0,Math.PI*2);ac.fill();ac.shadowBlur=0;ac.fillStyle='#ff9eb4';ac.fillRect(-12,-7,24,28);ac.fillStyle='#4b1628';ac.fillRect(-10,21,8,17);ac.fillRect(2,21,8,17);ac.fillStyle='#fff';ac.font='bold 10px Arial';ac.textAlign='center';ac.fillText(p.name||'Player',0,-40);
-  const a=p.angle||0;
+  const a=(p.slashT>0&&Number.isFinite(p.attackAngle))?p.attackAngle:(p.angle||0);
   if(p.weapon==='bow'){
     ac.save();ac.rotate(a);ac.strokeStyle='#d9a9bc';ac.lineWidth=3;ac.beginPath();ac.arc(22,0,18,-1.05,1.05);ac.stroke();
     ac.strokeStyle='#fff0f5';ac.lineWidth=2;ac.beginPath();ac.moveTo(4,0);ac.lineTo(43,0);ac.stroke();ac.restore();
@@ -1127,7 +1144,14 @@ function coopClientVisualTick(dt){
   arena.player.attackCd=Math.max(0,arena.player.attackCd-dt);arena.player.slashT=Math.max(0,arena.player.slashT-dt);arena.player.inv=Math.max(0,arena.player.inv-dt);arena.player.skillCd=Math.max(0,arena.player.skillCd-dt);
   // Multiplayer projectile visuals are client-side only; damage remains server-authoritative.
   for(const q of arena.projectiles){
-    if(q.owner==='coopArrow'||q.owner==='remoteArrow'){q.x+=q.vx*60*dt;q.y+=q.vy*60*dt;q.life-=dt;q.angle=Math.atan2(q.vy,q.vx);}
+    if(q.owner==='coopArrow'||q.owner==='remoteArrow'){
+      if(q.hit){
+        const dx=q.hit.x-q.x,dy=q.hit.y-q.y,dist=Math.hypot(dx,dy);
+        const step=8.5*60*dt;
+        if(dist<=step){q.x=q.hit.x;q.y=q.hit.y;q.life=0;burst(q.x,q.y,5,'hit');sfx('hit');continue}
+        q.vx=dx/dist*8.5;q.vy=dy/dist*8.5;
+      }
+      q.x+=q.vx*60*dt;q.y+=q.vy*60*dt;q.life-=dt;q.angle=Math.atan2(q.vy,q.vx);}
   }
   arena.projectiles=arena.projectiles.filter(q=>!(q.owner==='coopArrow'||q.owner==='remoteArrow') || (q.life>0&&q.x>-120&&q.x<arena.w+120&&q.y>-120&&q.y<arena.h+120));
   for(const q of arena.slashes)q.t-=dt;arena.slashes=arena.slashes.filter(q=>q.t>0);
@@ -1136,7 +1160,7 @@ function coopClientVisualTick(dt){
 function coopTick(){if(!coopSocket||coopSocket.readyState!==1)return;const p=arena.player,now=performance.now();if(now-coopLastNet>50){coopLastNet=now;const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0),dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);coopInput={x:dx,y:dy};coopSend({type:'input',x:dx,y:dy,angle:p.angle||0})}}
 function showCoopStart(show){const el=$('coopStartOverlay');if(el)el.classList.toggle('hidden',!show);if(show)updateCoopLobby()}
 function updateCoopLobby(){const total=Object.keys(coopPeers).length+(coopId?1:0),st=$('coopStartStatus'),btn=$('coopStartBattle'),txt=$('coopStartText');if(st)st.textContent=coopServerPhase==='battle'?'⚔️ Battle running • '+total+' players':coopServerPhase==='upgrade'?'✨ Everyone is choosing an upgrade':'🟢 Server room • '+total+' player'+(total===1?'':'s');if(btn){btn.disabled=!coopSocket||coopSocket.readyState!==1||!(coopServerPhase==='lobby'||coopServerPhase==='gameover');btn.textContent=coopServerPhase==='gameover'?'↻ RESTART RUN':(coopServerPhase==='lobby'?'▶ START BATTLE':'⚔️ BATTLE RUNNING')}if(txt)txt.textContent='Cloudflare server controls the battle clock, enemies, waves and upgrades. No player is the host.'}
-function resetArenaRun(){arena.running=false;arena.wave=1;arena.spawned=0;arena.enemies=[];arena.projectiles=[];arena.particles=[];arena.slashes=[];resetWaveUpgrades();arena.player={x:0,y:0,targetX:0,targetY:0,hp:combatStats().maxHp,dir:1,angle:0,attackCd:0,slashT:0,inv:0,skillCd:0};resizeArena();arenaStats()}
+function resetArenaRun(){arena.running=false;arena.wave=1;arena.spawned=0;arena.enemies=[];arena.projectiles=[];arena.particles=[];arena.slashes=[];resetWaveUpgrades();arena.player={x:0,y:0,targetX:0,targetY:0,hp:combatStats().maxHp,dir:1,angle:0,attackAngle:0,attackCd:0,slashT:0,inv:0,skillCd:0};resizeArena();arenaStats()}
 function beginCoopBattle(announce=true){if(arenaModal.classList.contains('hidden'))arenaModal.classList.remove('hidden');$('coopModal').classList.add('hidden');showCoopStart(false);arena.running=true;initArenaAudio();arenaStats();arenaLog('⚔️ Cloudflare server is running the battle.');if(announce)coopSend({type:'startRequest',stats:coopStats()})}
 function coopStart(){coopStarted=false;coopServerPhase='lobby';coopServerStats=null;coopLastServerSeq=0;coopLastServerAt=0;coopServerX=0;coopServerY=0;clearTimeout(coopStartTimer);resetArenaRun();showCoopStart(true);updateCoopLobby();coopConnect()}
 $('lsaCoopBtn').onclick=()=>{coopOpenedFromRunning=!!arena.running;arena.running=false;$('coopModal').classList.remove('hidden');showCoopStart(false);coopSetStatus('Offline');updateCoopLobby()};
@@ -1152,6 +1176,7 @@ slash=function(angle){
   if(coopSocket&&coopSocket.readyState===1&&coopStarted){
     if(arena.player.downed||arena.player.attackCd>0)return;
     arena.player.angle=angle;
+    arena.player.attackAngle=angle;
     arena.player.attackCd=.5;
     const weapon=arenaState.activeWeaponType==='bow'?'bow':'sword';
     arena.player.weapon=weapon;
@@ -1161,7 +1186,8 @@ slash=function(angle){
       arena.projectiles.push({
         x:arena.player.x+Math.cos(angle)*20,y:arena.player.y+Math.sin(angle)*20,
         vx:Math.cos(angle)*arrowSpeed,vy:Math.sin(angle)*arrowSpeed,
-        life:1.6,damage:0,angle,owner:'coopArrow',kind:'playerArrow'
+        life:1.6,damage:0,angle,owner:'coopArrow',kind:'playerArrow',
+        hit:null
       });
       burst(arena.player.x+Math.cos(angle)*18,arena.player.y+Math.sin(angle)*18,3,'arrow');
       sfx('bow');
@@ -1174,6 +1200,7 @@ slash=function(angle){
     coopSend({type:'attack',angle,weapon,stats:coopStats()});
     return;
   }
+  arena.player.attackAngle=angle;
   originalSlash(angle)
 };
 let arenaSimTimer=null,arenaSimLast=0,arenaSimAccum=0;
