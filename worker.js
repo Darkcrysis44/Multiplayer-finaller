@@ -85,7 +85,7 @@ export class Room {
     }
     if(m.type==='restartRequest' && this.phase==='gameover' && this.players.size>=1){
       this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+1200;
-      for(const q of this.players.values()){q.x=WIDTH/2;q.y=HEIGHT/2;q.hp=q.maxHp;q.downed=false;q.reviveProgress=0;q.ix=0;q.iy=0;q.lastAttack=0;q.inputSeq=0;q.lastInputAt=Date.now()}
+      for(const q of this.players.values()){q.x=WIDTH/2;q.y=HEIGHT/2;q.hp=q.maxHp;q.downed=false;q.reviveProgress=0;q.ix=0;q.iy=0;q.lastAttack=0}
       this.broadcast({type:'serverRestart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
     }
     if(m.type==='startRequest' && this.phase==='lobby' && this.players.size>=1){
@@ -191,71 +191,48 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     if(p.skillCd>0)return;
     const requestedSkill=String(m.skill||p.skill||'');
     if(p.skills.length && !p.skills.includes(requestedSkill))return;
-    const valid=new Set(['nova','dash','barrage','moon','storm','bloom','break','eclipse','divine','cataclysm']);
-    if(!valid.has(requestedSkill))return;
+    const SKILL_ALIASES={
+      nova:'nova', dash:'dash', barrage:'barrage', moon:'moon', storm:'storm',
+      bloom:'moon', break:'barrage', eclipse:'storm', divine:'nova', cataclysm:'moon'
+    };
+    const skill=SKILL_ALIASES[requestedSkill]||'';
     const angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;
     p.angle=angle;
-    const stats=clamp(p.atk,1,10000);
-    const defs={nova:8,dash:5,barrage:10,moon:7,storm:12,bloom:7,break:10,eclipse:12,divine:8,cataclysm:7};
-    p.skillCd=defs[requestedSkill];
+    const stats=p.atk;
+    const defs={nova:{cd:8},dash:{cd:5},barrage:{cd:10},moon:{cd:7},storm:{cd:12}};
+    if(!skill)return;
+    p.skillCd=defs[skill].cd;
     const hitIds=[];
-    const damage=(e,mult)=>{
-      if(!e||e.hp<=0)return;
-      let d=stats*mult;
-      if(Math.random()<p.crit)d*=2;
-      if(e.shieldT>0)d*=.35;
-      e.hp=Math.max(0,e.hp-d);e.hit=.12;
-      hitIds.push({id:e.id,damage:d});
-    };
-    const radial=(radius,mult)=>{for(const e of this.enemies)if(dist(e,p)<radius)damage(e,mult)};
-    const cone=(range,width,mult)=>{
-      const ca=Math.cos(angle),sa=Math.sin(angle);
-      for(const e of this.enemies){
-        const rx=e.x-p.x,ry=e.y-p.y,along=rx*ca+ry*sa;
-        if(along<0||along>range)continue;
-        const side=Math.abs(-rx*sa+ry*ca),radius=(e.r||20)+30;
-        if(side>radius)continue;
-        let da=Math.atan2(ry,rx)-angle;da=Math.atan2(Math.sin(da),Math.cos(da));
-        if(Math.abs(da)<=width)damage(e,mult);
-      }
-    };
-    let projectile=null;
-    if(requestedSkill==='nova')radial(190,3);
-    else if(requestedSkill==='dash'){
-      p.x=clamp(p.x+Math.cos(angle)*180,30,WIDTH-30);
-      p.y=clamp(p.y+Math.sin(angle)*180,62,HEIGHT-30);
-      radial(75,2);
-    }else if(requestedSkill==='barrage'){
+    const damage=(e,mult)=>{if(!e||e.hp<=0)return;let d=stats*mult;if(Math.random()<p.crit)d*=2;e.hp=Math.max(0,e.hp-d);e.hit=.12;hitIds.push({id:e.id,damage:d});};
+    if(skill==='nova'){
+      for(const e of this.enemies)if(dist(e,p)<190)damage(e,3);
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }else if(skill==='barrage'){
       for(let j=-2;j<=2;j++){
-        const aa=angle+j*.18,old=angle;p.angle=aa;cone(165,.65,2.2);p.angle=old;
+        const a=angle+j*.18;
+        for(const e of this.enemies){
+          const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy);
+          let da=Math.atan2(dy,dx)-a;da=Math.atan2(Math.sin(da),Math.cos(da));
+          if(d<165&&Math.abs(da)<.65)damage(e,2.2);
+        }
       }
-    }else if(requestedSkill==='moon'){
-      projectile={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*7,vy:Math.sin(angle)*7,angle,life:2.2,damage:stats*5,skill:'moon',radius:18};
-      this.projectiles.push(projectile);
-    }else if(requestedSkill==='storm'){
-      radial(260,2.5);
-    }else if(requestedSkill==='bloom'){
-      radial(155,3.5);
-      p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.12);
-    }else if(requestedSkill==='break'){
-      cone(220,.55,4);
-    }else if(requestedSkill==='eclipse'){
-      radial(320,3.8);
-    }else if(requestedSkill==='divine'){
-      radial(240,5);
-      p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.20);
-    }else if(requestedSkill==='cataclysm'){
-      projectile={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*6,vy:Math.sin(angle)*6,angle,life:2.8,damage:stats*8,skill:'cataclysm',radius:28};
-      this.projectiles.push(projectile);
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }else if(skill==='moon'){
+      const proj={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*7,vy:Math.sin(angle)*7,angle,life:2.2,damage:stats*5,skill:'moon',radius:18};
+      this.projectiles.push(proj);
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,projectile:proj,serverNow:now});
+    }else if(skill==='storm'){
+      for(const e of this.enemies)if(dist(e,p)<260)damage(e,2.5);
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    }else if(skill==='dash'){
+      p.x=clamp(p.x+Math.cos(angle)*180,30,WIDTH-30);p.y=clamp(p.y+Math.sin(angle)*180,62,HEIGHT-30);
+      for(const e of this.enemies)if(dist(e,p)<75)damage(e,2);
+      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
     }
     for(const h of hitIds){
       const e=this.enemies.find(q=>q.id===h.id);
       if(e&&e.hp<=0)this.killEnemy(e,p.id);
     }
-    this.broadcast({
-      type:'skillFx',skill:requestedSkill,from:p.id,x:p.x,y:p.y,angle,
-      hitIds,projectile,serverNow:now
-    });
     this.broadcastState(true);
   }
   serverAttack(p,m){
@@ -421,7 +398,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0,inputSeq:p.inputSeq||0,progression:this.progression(p)}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,xp:q.xp||0,rebirths:q.rebirths||0,mult:q.mult||1,progressRev:q.progressRev||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life,hit:!!a.hit}))}}
+  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0,progression:this.progression(p)}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,xp:q.xp||0,rebirths:q.rebirths||0,mult:q.mult||1,progressRev:q.progressRev||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life,hit:!!a.hit}))}}
   broadcastState(force=false){
     const now=Date.now();
     if(!force && now-this.lastState<STATE_MS)return;
