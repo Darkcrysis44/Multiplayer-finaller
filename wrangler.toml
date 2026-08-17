@@ -8,14 +8,9 @@ binding = "ASSETS"
 
 [durable_objects]
 bindings = [
-  { name = "ROOM", class_name = "Room" },
-  { name = "AUTH", class_name = "Auth" }
+  { name = "ROOM", class_name = "Room" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["Auth"]

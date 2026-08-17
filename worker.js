@@ -36,8 +36,8 @@ const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const cleanRoom=s=>String(s||'LOVE').toUpperCase().replace(/[^A-Z0-9_-]/g,'').slice(0,24)||'LOVE';
 
 async function authCall(env, path, body, token=''){
-  const id=env.AUTH.idFromName('AUTH');
-  const stub=env.AUTH.get(id);
+  const id=env.ROOM.idFromName('AUTH');
+  const stub=env.ROOM.get(id);
   const headers={'Content-Type':'application/json'};
   if(token)headers.Authorization='Bearer '+token;
   const r=await stub.fetch('https://auth'+path,{method:'POST',headers,body:JSON.stringify(body||{})});
@@ -77,13 +77,13 @@ export default {
   }
 };
 
-export class Auth {
-  constructor(state,env){this.state=state;this.env=env}
+
+export class Room {
   async hash(password,salt){const enc=new TextEncoder();const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:120000,hash:'SHA-256'},key,256);return this.b64(new Uint8Array(bits))}
   b64(a){let s='';for(const x of a)s+=String.fromCharCode(x);return btoa(s)}
   bytes(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return a}
   async jsonBody(req){return req.json().catch(()=>({}))}
-  async fetch(request){const url=new URL(request.url),path=url.pathname,m=await this.jsonBody(request);const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');
+  async authFetch(request){const url=new URL(request.url),path=url.pathname,m=await this.jsonBody(request);const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');
     if(path==='/api/register')return this.register(m);
     if(path==='/api/login')return this.login(m);
     const username=token?await this.state.storage.get('session:'+token):null;
@@ -100,9 +100,6 @@ export class Auth {
   async getProfile(username){const rec=await this.state.storage.get('account:'+username.toLowerCase());return rec?.profile||null}
   async profile(username){return Response.json({ok:true,username,profile:await this.getProfile(username)})}
   async save(username,m){const key='account:'+username.toLowerCase(),rec=await this.state.storage.get(key);if(!rec)return Response.json({error:'Account missing'},{status:404});const clean={level:Math.max(1,Math.min(9999,Number(m.level)||1)),xp:Math.max(0,Math.min(1e12,Number(m.xp)||0)),rebirths:Math.max(0,Math.min(9999,Number(m.rebirths)||0)),mult:Math.max(1,Math.min(1000,Number(m.mult)||1)),stats:{maxHp:Math.max(20,Math.min(100000,Number(m.stats?.maxHp)||100)),atk:Math.max(1,Math.min(10000,Number(m.stats?.atk)||14)),spd:Math.max(.5,Math.min(20,Number(m.stats?.spd)||3.2)),armor:Math.max(0,Math.min(1000,Number(m.stats?.armor)||0)),crit:Math.max(0,Math.min(1,Number(m.stats?.crit)||.08))},gear:m.gear||rec.profile.gear,activeWeapon:m.activeWeapon||rec.profile.activeWeapon,activeWeaponType:m.activeWeaponType||rec.profile.activeWeaponType,skills:Array.isArray(m.skills)?m.skills.slice(0,16):[],passives:Array.isArray(m.passives)?m.passives.slice(0,32):[],lastLoot:m.lastLoot||null,balance:Math.max(0,Math.floor(Number(m.balance)||0)),profileVersion:4};await this.state.storage.put(key,{...rec,profile:clean});return Response.json({ok:true,profile:clean})}
-}
-
-export class Room {
   constructor(state,env) {
     this.state=state; this.env=env; this.sockets=new Map(); this.players=new Map();
     this.phase='lobby'; this.wave=1; this.enemies=[]; this.spawned=0; this.nextEnemy=1;
@@ -110,6 +107,8 @@ export class Room {
     this.offer=null; this.picks=new Map(); this.attackSeq=0; this.projectiles=[];
   }
   async fetch(request) {
+    const path=new URL(request.url).pathname;
+    if(path.startsWith('/api/')) return this.authFetch(request);
     if(request.headers.get('Upgrade')!=='websocket') return new Response('Room online');
     if(this.sockets.size>=MAX_PLAYERS) return new Response('Room full',{status:429});
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
@@ -232,7 +231,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
       });
     }
   }
-  async persistProfile(p){if(!p?.authToken)return;const profile={level:p.level,xp:p.xp,rebirths:p.rebirths,mult:p.mult,stats:{maxHp:p.baseMaxHp??p.maxHp,atk:p.baseAtk??p.atk,spd:p.baseSpd??p.spd,armor:p.baseArmor??p.armor,crit:p.baseCrit??p.crit},gear:p.profile?.gear||{},activeWeapon:p.profile?.activeWeapon||'Rose Blade',activeWeaponType:p.profile?.activeWeaponType||'sword',skills:p.skills||[],passives:p.passives||[],lastLoot:p.profile?.lastLoot||null,balance:Number(p.profile?.balance||0),profileVersion:4};try{const r=await this.env.AUTH.get(this.env.AUTH.idFromName('AUTH')).fetch('https://auth/api/profile/save',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+p.authToken},body:JSON.stringify(profile)});if(r.ok)p.profile=profile;}catch{}}
+  async persistProfile(p){if(!p?.authToken)return;const profile={level:p.level,xp:p.xp,rebirths:p.rebirths,mult:p.mult,stats:{maxHp:p.baseMaxHp??p.maxHp,atk:p.baseAtk??p.atk,spd:p.baseSpd??p.spd,armor:p.baseArmor??p.armor,crit:p.baseCrit??p.crit},gear:p.profile?.gear||{},activeWeapon:p.profile?.activeWeapon||'Rose Blade',activeWeaponType:p.profile?.activeWeaponType||'sword',skills:p.skills||[],passives:p.passives||[],lastLoot:p.profile?.lastLoot||null,balance:Number(p.profile?.balance||0),profileVersion:4};try{const r=await this.env.ROOM.get(this.env.ROOM.idFromName('AUTH')).fetch('https://auth/api/profile/save',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+p.authToken},body:JSON.stringify(profile)});if(r.ok)p.profile=profile;}catch{}}
   serverSkill(p,m){
     const now=Date.now();
     if(p.skillCd>0)return;
