@@ -978,41 +978,11 @@ let coopClockOffset=0, coopStartTimer=null, coopOpenedFromRunning=false;
 let coopRemoteTargets={}, coopUpgradeOffer=null, coopUpgradeChosen=false, coopServerPhase='lobby';
 let coopInput={x:0,y:0};
 let coopLastServerSeq=0, coopLastServerAt=0, coopServerX=0, coopServerY=0, coopPredictionError=0;
-let coopPendingInputs=[], coopLastAckInputSeq=0, coopLastInputSentAt=0;
-const COOP_INPUT_HZ=20, COOP_INPUT_MS=1000/COOP_INPUT_HZ, COOP_RECONCILE_SOFT=18, COOP_RECONCILE_HARD=85;
-function coopReadInput(){const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0);const dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);return {x:dx,y:dy}}
-function coopPredictStep(x,y,input,dt){const len=Math.hypot(input.x,input.y)||1;const speed=Number(coopServerStats?.spd||combatStats().spd||3.2);return {x:Math.max(30,Math.min(arena.w-30,x+input.x/len*speed*60*dt)),y:Math.max(62,Math.min(arena.h-30,y+input.y/len*speed*60*dt))};}
-function coopReconcile(serverX,serverY,ackSeq){
-  if(!Number.isFinite(serverX)||!Number.isFinite(serverY))return;
-  coopLastAckInputSeq=Math.max(coopLastAckInputSeq,Number(ackSeq)||0);
-  coopPendingInputs=coopPendingInputs.filter(i=>i.seq>coopLastAckInputSeq);
-  let x=serverX,y=serverY;
-  for(const i of coopPendingInputs){
-    const r=coopPredictStep(x,y,i,COOP_INPUT_MS/1000);
-    x=r.x;y=r.y;
-  }
-  const baseX=coopHasPredictedPosition?coopPredictedX:arena.player.x;
-  const baseY=coopHasPredictedPosition?coopPredictedY:arena.player.y;
-  const err=Math.hypot(x-baseX,y-baseY);
-  coopPredictionError=err;
-  // Correct the simulation target, never the rendered position directly.
-  // This removes rubber-banding while keeping authoritative reconciliation.
-  if(err>COOP_RECONCILE_HARD){
-    coopPredictedX=x;coopPredictedY=y;
-  }else if(err>COOP_RECONCILE_SOFT){
-    coopPredictedX += (x-coopPredictedX)*.65;
-    coopPredictedY += (y-coopPredictedY)*.65;
-  }else{
-    coopPredictedX=x;coopPredictedY=y;
-  }
-  coopHasPredictedPosition=true;
-  coopServerX=serverX;coopServerY=serverY;
-}
 function coopUrl(room){const proto=location.protocol==='https:'?'wss:':'ws:';return proto+'//'+location.host+'/ws?room='+encodeURIComponent(room)}
 function coopSetStatus(t){const el=$('coopStatus');if(el)el.textContent=t}
 function coopRenderPlayers(players){
   coopPeers={};
-  (players||[]).forEach(p=>{if(p.id!==coopId)coopPeers[p.id]={id:p.id,name:p.name,x:p.x||80,y:p.y||100,targetX:p.x||80,targetY:p.y||100,angle:p.angle||0,targetAngle:p.angle||0,attackAngle:p.angle||0,hp:p.hp,maxHp:p.maxHp,downed:!!p.downed,reviveProgress:p.reviveProgress||0,slashT:0}});
+  (players||[]).forEach(p=>{if(p.id!==coopId)coopPeers[p.id]={id:p.id,name:p.name,x:p.x||80,y:p.y||100,targetX:p.x||80,targetY:p.y||100,angle:p.angle||0,targetAngle:p.angle||0,hp:p.hp,maxHp:p.maxHp,downed:!!p.downed,reviveProgress:p.reviveProgress||0,slashT:0}});
   const g=$('coopPlayers');if(g)g.innerHTML=(players||[]).map(p=>'<span class="coop-player">'+(p.id===coopId?'💗 ':'')+(p.name||'Player')+'</span>').join('');
   updateCoopLobby();
 }
@@ -1031,7 +1001,6 @@ function coopStats(){
   return {
     atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:Math.min(arena.player.hp,c.maxHp),
     skill:(arenaState.skills[0]?.id||''),
-    skills:Array.isArray(arenaState.skills)?arenaState.skills.map(s=>s?.id).filter(Boolean).slice(0,16):[],
     level:Number(arenaState.level||1),xp:Number(arenaState.xp||0),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),progressRev:Number(arenaState.lastProgressRev||0),
     passives:Array.isArray(arenaState.passives)?arenaState.passives.slice(0,32):[]
   };
@@ -1190,7 +1159,6 @@ function coopApplyState(m){
   if(m.player){
     if(Number.isFinite(m.player.x)){coopServerX=m.player.x;arena.player.targetX=m.player.x;}
     if(Number.isFinite(m.player.y)){coopServerY=m.player.y;arena.player.targetY=m.player.y;}
-    if(Number.isFinite(m.player.inputSeq))coopReconcile(m.player.x,m.player.y,m.player.inputSeq);
     if(!Number.isFinite(arena.player.targetX))arena.player.targetX=m.player.x;
     if(!Number.isFinite(arena.player.targetY))arena.player.targetY=m.player.y;
     arena.player.hp=m.player.hp;arena.player.maxHp=m.player.maxHp||arena.player.maxHp;arena.player.angle=m.player.angle||arena.player.angle;arena.player.weapon=m.player.weapon||arena.player.weapon||'sword';arena.player.skill=m.player.skill||arena.player.skill||'';arena.player.skillCd=Number(m.player.skillCd)||0;arena.player.downed=!!m.player.downed;arena.player.reviveProgress=m.player.reviveProgress||0;
@@ -1204,7 +1172,7 @@ function coopApplyState(m){
     arenaStats();
   }
   if(Array.isArray(m.players)){
-    m.players.forEach(p=>{if(p.id===coopId)return;let q=coopPeers[p.id]||(coopPeers[p.id]={id:p.id,name:p.name||'Player',x:p.x||80,y:p.y||100,targetX:p.x||80,targetY:p.y||100,angle:0,targetAngle:0,weapon:p.weapon||'sword',skill:p.skill||'',hp:p.hp,maxHp:p.maxHp,slashT:0});q.name=p.name||q.name;q.targetX=p.x;q.targetY=p.y;q.targetAngle=p.angle||0;q.attackAngle=Number.isFinite(p.attackAngle)?p.attackAngle:q.attackAngle;q.weapon=p.weapon||q.weapon||'sword';q.skill=p.skill||q.skill||'';q.hp=p.hp;q.maxHp=p.maxHp;q.downed=!!p.downed;q.reviveProgress=p.reviveProgress||0});
+    m.players.forEach(p=>{if(p.id===coopId)return;let q=coopPeers[p.id]||(coopPeers[p.id]={id:p.id,name:p.name||'Player',x:p.x||80,y:p.y||100,targetX:p.x||80,targetY:p.y||100,angle:0,targetAngle:0,weapon:p.weapon||'sword',skill:p.skill||'',hp:p.hp,maxHp:p.maxHp,slashT:0});q.name=p.name||q.name;q.targetX=p.x;q.targetY=p.y;q.targetAngle=p.angle||0;q.weapon=p.weapon||q.weapon||'sword';q.skill=p.skill||q.skill||'';q.hp=p.hp;q.maxHp=p.maxHp;q.downed=!!p.downed;q.reviveProgress=p.reviveProgress||0});
   }
   if(Array.isArray(m.projectiles)){
     const incoming=new Map(m.projectiles.map(a=>[a.id,a]));
@@ -1224,47 +1192,27 @@ function coopApplyState(m){
     arena.enemies=arena.enemies.filter(e=>incoming.has(e.id));
   }
 }
-function coopDrawPlayers(){
-  if(!coopSocket)return;
-  for(const p of Object.values(coopPeers)){
-    ac.save();ac.translate(p.x,p.y);
-    if(p.downed){
-      const prog=Math.max(0,Math.min(1,(p.reviveProgress||0)/2));
-      ac.globalAlpha=.95;ac.fillStyle='rgba(80,255,150,.14)';ac.beginPath();ac.arc(0,0,42,0,Math.PI*2);ac.fill();
-      ac.strokeStyle='#6dffad';ac.lineWidth=3;ac.beginPath();ac.arc(0,0,42,-Math.PI/2,-Math.PI/2+Math.PI*2*prog);ac.stroke();
-      ac.strokeStyle='rgba(120,255,170,.45)';ac.lineWidth=2;ac.beginPath();ac.arc(0,0,48,0,Math.PI*2);ac.stroke();
-      ac.globalAlpha=.65;ac.fillStyle='#ffafc2';ac.beginPath();ac.arc(0,-20,11,0,Math.PI*2);ac.fill();ac.fillRect(-10,-8,20,30);
-      ac.globalAlpha=1;ac.fillStyle='#6dffad';ac.font='bold 10px Arial';ac.textAlign='center';
-      ac.fillText((p.reviveProgress||0)>0?'REVIVING '+Math.ceil(2-(p.reviveProgress||0))+'s':'DOWNED',0,-58);
-      ac.restore();continue;
-    }
-    if(p.inv>0&&Math.floor(p.inv*20)%2===0)ac.globalAlpha=.45;
-    ac.fillStyle='#ffafc2';ac.shadowColor='#ff5f89';ac.shadowBlur=18;
-    ac.beginPath();ac.arc(0,-20,11,0,Math.PI*2);ac.fill();
-    ac.fillStyle='#f4d9df';ac.shadowBlur=0;ac.fillRect(-10,-8,20,30);
-    ac.fillStyle='#7d3550';ac.fillRect(-10,22,7,19);ac.fillRect(3,22,7,19);
-    ac.fillStyle='#fff';ac.font='bold 10px Arial';ac.textAlign='center';ac.fillText(p.name||'Player',0,-40);
-    ac.fillStyle='#160911';ac.fillRect(-28,-48,56,6);
-    ac.fillStyle='#ff6f91';ac.fillRect(-28,-48,56*Math.max(0,(p.hp||0)/(p.maxHp||1)),6);
-    ac.strokeStyle='#ffd8e2';ac.lineWidth=1;ac.strokeRect(-28,-48,56,6);
-
-    const a=(p.slashT>0&&Number.isFinite(p.attackAngle))?p.attackAngle:(p.angle||0);
-    ac.save();ac.rotate(a);
-    // Same arm/hand geometry as the solo player.
-    ac.strokeStyle='#f2b7c7';ac.lineWidth=5;ac.lineCap='round';
-    ac.beginPath();ac.moveTo(5,-4);ac.lineTo(18,-1);ac.stroke();
-    if(p.weapon==='bow'){
-      ac.strokeStyle='#d9a9bc';ac.lineWidth=3;ac.beginPath();ac.arc(27,0,20,-1.1,1.1);ac.stroke();
-      ac.strokeStyle='#fff0f5';ac.lineWidth=2;ac.beginPath();ac.moveTo(7,0);ac.lineTo(48,0);ac.stroke();
-    }else{
-      ac.strokeStyle='#fff0f5';ac.lineWidth=4;ac.beginPath();ac.moveTo(7,0);ac.lineTo(48,0);ac.stroke();
-      ac.strokeStyle='#ffb8c9';ac.lineWidth=2;ac.beginPath();ac.moveTo(43,0);ac.lineTo(52,0);ac.stroke();
-    }
-    ac.restore();
-    ac.fillStyle='#ff6e95';ac.beginPath();ac.moveTo(-7,-25);ac.quadraticCurveTo(0,-35,7,-25);ac.fill();
-    ac.restore();
+function coopDrawPlayers(){if(!coopSocket)return;for(const p of Object.values(coopPeers)){
+  ac.save();ac.translate(p.x,p.y);
+  if(p.downed){
+    const prog=Math.max(0,Math.min(1,(p.reviveProgress||0)/2));
+    ac.globalAlpha=.95;ac.fillStyle='rgba(80,255,150,.14)';ac.beginPath();ac.arc(0,0,42,0,Math.PI*2);ac.fill();
+    ac.strokeStyle='#6dffad';ac.lineWidth=3;ac.beginPath();ac.arc(0,0,42,-Math.PI/2,-Math.PI/2+Math.PI*2*prog);ac.stroke();
+    ac.strokeStyle='rgba(120,255,170,.45)';ac.lineWidth=2;ac.beginPath();ac.arc(0,0,48,0,Math.PI*2);ac.stroke();
+    ac.globalAlpha=.65;ac.fillStyle='#ffafc2';ac.beginPath();ac.arc(0,-18,11,0,Math.PI*2);ac.fill();ac.fillRect(-10,-8,20,30);
+    ac.globalAlpha=1;ac.fillStyle='#6dffad';ac.font='bold 10px Arial';ac.textAlign='center';ac.fillText(prog>0?'REVIVING '+Math.ceil(2-(p.reviveProgress||0))+'s':'DOWNED',0,-58);
+    ac.restore();continue;
   }
-}
+  ac.shadowColor='#ff9fbd';ac.shadowBlur=20;ac.fillStyle='#ff6f9a';ac.beginPath();ac.arc(0,-18,11,0,Math.PI*2);ac.fill();ac.shadowBlur=0;ac.fillStyle='#ff9eb4';ac.fillRect(-12,-7,24,28);ac.fillStyle='#4b1628';ac.fillRect(-10,21,8,17);ac.fillRect(2,21,8,17);ac.fillStyle='#fff';ac.font='bold 10px Arial';ac.textAlign='center';ac.fillText(p.name||'Player',0,-40);
+  const a=(p.slashT>0&&Number.isFinite(p.attackAngle))?p.attackAngle:(p.angle||0);
+  if(p.weapon==='bow'){
+    ac.save();ac.rotate(a);ac.strokeStyle='#d9a9bc';ac.lineWidth=3;ac.beginPath();ac.arc(22,0,18,-1.05,1.05);ac.stroke();
+    ac.strokeStyle='#fff0f5';ac.lineWidth=2;ac.beginPath();ac.moveTo(4,0);ac.lineTo(43,0);ac.stroke();ac.restore();
+  }else{
+    ac.save();ac.rotate(a);ac.strokeStyle='#fff0f5';ac.lineWidth=4;ac.beginPath();ac.moveTo(4,0);ac.lineTo(48,0);ac.stroke();ac.strokeStyle='#ffb8c9';ac.lineWidth=2;ac.beginPath();ac.moveTo(43,0);ac.lineTo(52,0);ac.stroke();ac.restore();
+    if(p.slashT>0){ac.strokeStyle='#fff0f5';ac.lineWidth=6;ac.globalAlpha=Math.min(1,p.slashT/.22);ac.beginPath();ac.arc(18,0,55,-1,.8);ac.stroke();}
+  }
+  ac.restore()}}
 function coopClientVisualTick(dt){
   for(const p of Object.values(coopPeers)){
     const k=Math.min(1,dt*18);p.x+=(p.targetX-p.x)*k;p.y+=(p.targetY-p.y)*k;
@@ -1274,14 +1222,19 @@ function coopClientVisualTick(dt){
     p.slashT=Math.max(0,(p.slashT||0)-dt);
   }
   for(const e of arena.enemies){if(Number.isFinite(e.targetX)){const k=Math.min(1,dt*16);e.x+=(e.targetX-e.x)*k;e.y+=(e.targetY-e.y)*k}e.hit=Math.max(0,(e.hit||0)-dt);e.attack=Math.max(0,(e.attack||0)-dt)}
-  // Render the fixed-step predicted simulation smoothly at the display frame rate.
-  // Movement itself is advanced only in coopTick() at the same 50 ms cadence
-  // used for network input, so frame rate and network jitter cannot double-apply movement.
-  if(coopStarted && coopHasPredictedPosition){
-    const k=1-Math.exp(-dt*28);
-    coopRenderX += (coopPredictedX-coopRenderX)*k;
-    coopRenderY += (coopPredictedY-coopRenderY)*k;
-    arena.player.x=coopRenderX;arena.player.y=coopRenderY;
+  if(Number.isFinite(coopServerX)&&Number.isFinite(coopServerY)){
+    // Client prediction keeps the local player responsive; server snapshots
+    // continuously reconcile small drift instead of snapping after 180ms RTT.
+    const ex=coopServerX-arena.player.x, ey=coopServerY-arena.player.y;
+    const error=Math.hypot(ex,ey);
+    if(error>90){
+      arena.player.x=coopServerX; arena.player.y=coopServerY;
+    }else{
+      const correction=Math.min(1,dt*(error>25?7:3.5));
+      arena.player.x+=ex*correction; arena.player.y+=ey*correction;
+    }
+    arena.player.x=Math.max(30,Math.min(arena.w-30,arena.player.x));
+    arena.player.y=Math.max(62,Math.min(arena.h-30,arena.player.y));
   }
   arena.player.attackCd=Math.max(0,arena.player.attackCd-dt);arena.player.slashT=Math.max(0,arena.player.slashT-dt);arena.player.inv=Math.max(0,arena.player.inv-dt);arena.player.skillCd=Math.max(0,arena.player.skillCd-dt);
   // Multiplayer arrows are rendered from authoritative server snapshots.
@@ -1299,33 +1252,12 @@ function coopClientVisualTick(dt){
   for(const q of arena.slashes)q.t-=dt;arena.slashes=arena.slashes.filter(q=>q.t>0);
   for(const q of arena.particles){q.x+=q.vx*60*dt;q.y+=q.vy*60*dt;q.vx*=.96;q.vy*=.96;q.life-=dt}arena.particles=arena.particles.filter(q=>q.life>0);
 }
-function coopTick(){
-  if(!coopSocket||coopSocket.readyState!==1)return;
-  const now=performance.now();
-  if(now-coopLastInputSentAt<COOP_INPUT_MS)return;
-  coopLastInputSentAt=now;
-  const input=coopReadInput();
-  const seq=++coopInputSeq;
-  // Advance the local simulation exactly once per network input sample.
-  // This is the same fixed 50 ms step the server uses, preventing movement
-  // from being applied once by the network tick and again by every render frame.
-  if(!coopHasPredictedPosition){
-    coopPredictedX=Number.isFinite(coopServerX)?coopServerX:arena.player.x;
-    coopPredictedY=Number.isFinite(coopServerY)?coopServerY:arena.player.y;
-    coopRenderX=coopPredictedX;coopRenderY=coopPredictedY;
-    coopHasPredictedPosition=true;
-  }
-  const r=coopPredictStep(coopPredictedX,coopPredictedY,input,COOP_INPUT_MS/1000);
-  coopPredictedX=r.x;coopPredictedY=r.y;
-  coopPendingInputs.push({seq,x:input.x,y:input.y});
-  if(coopPendingInputs.length>80)coopPendingInputs.splice(0,coopPendingInputs.length-80);
-  coopSend({type:'input',seq,x:input.x,y:input.y,angle:arena.player.angle||0});
-}
+function coopTick(){if(!coopSocket||coopSocket.readyState!==1)return;const p=arena.player,now=performance.now();if(now-coopLastNet>50){coopLastNet=now;const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0),dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);coopInput={x:dx,y:dy};coopSend({type:'input',x:dx,y:dy,angle:p.angle||0})}}
 function showCoopStart(show){const el=$('coopStartOverlay');if(el)el.classList.toggle('hidden',!show);if(show)updateCoopLobby()}
 function updateCoopLobby(){const total=Object.keys(coopPeers).length+(coopId?1:0),st=$('coopStartStatus'),btn=$('coopStartBattle'),txt=$('coopStartText');if(st)st.textContent=coopServerPhase==='battle'?'⚔️ Battle running • '+total+' players':coopServerPhase==='upgrade'?'✨ Everyone is choosing an upgrade':'🟢 Server room • '+total+' player'+(total===1?'':'s');if(btn){btn.disabled=!coopSocket||coopSocket.readyState!==1||!(coopServerPhase==='lobby'||coopServerPhase==='gameover');btn.textContent=coopServerPhase==='gameover'?'↻ RESTART RUN':(coopServerPhase==='lobby'?'▶ START BATTLE':'⚔️ BATTLE RUNNING')}if(txt)txt.textContent='Cloudflare server controls the battle clock, enemies, waves and upgrades. No player is the host.'}
 function resetArenaRun(){arena.running=false;arena.wave=1;arena.spawned=0;arena.enemies=[];arena.projectiles=[];arena.particles=[];arena.slashes=[];resetWaveUpgrades();arena.player={x:0,y:0,targetX:0,targetY:0,hp:combatStats().maxHp,dir:1,angle:0,attackAngle:0,attackCd:0,slashT:0,inv:0,skillCd:0};resizeArena();arenaStats()}
 function beginCoopBattle(announce=true){if(arenaModal.classList.contains('hidden'))arenaModal.classList.remove('hidden');$('coopModal').classList.add('hidden');showCoopStart(false);arena.running=true;initArenaAudio();arenaStats();arenaLog('⚔️ Cloudflare server is running the battle.');if(announce){sendProgressionSync();coopSend({type:'startRequest',stats:coopStats()})}}
-function coopStart(){coopStarted=false;coopServerPhase='lobby';coopServerStats=null;coopLastServerSeq=0;coopLastServerAt=0;coopServerX=0;coopServerY=0;coopPendingInputs=[];coopLastAckInputSeq=0;coopLastInputSentAt=0;coopInputSeq=0;coopHasPredictedPosition=false;coopPredictedX=0;coopPredictedY=0;coopRenderX=0;coopRenderY=0;clearTimeout(coopStartTimer);resetArenaRun();showCoopStart(true);updateCoopLobby();coopConnect()}
+function coopStart(){coopStarted=false;coopServerPhase='lobby';coopServerStats=null;coopLastServerSeq=0;coopLastServerAt=0;coopServerX=0;coopServerY=0;clearTimeout(coopStartTimer);resetArenaRun();showCoopStart(true);updateCoopLobby();coopConnect()}
 $('lsaCoopBtn').onclick=()=>{coopOpenedFromRunning=!!arena.running;arena.running=false;$('coopModal').classList.remove('hidden');showCoopStart(false);coopSetStatus('Offline');updateCoopLobby()};
 $('coopClose').onclick=()=>{$('coopModal').classList.add('hidden');arena.running=false;showCoopStart(false);coopOpenedFromRunning=false};
 $('coopHost').onclick=()=>coopStart();$('coopJoin').onclick=()=>coopStart();$('coopRandom').onclick=()=>{$('coopRoom').value=Math.random().toString(36).slice(2,8).toUpperCase()};
@@ -1338,7 +1270,7 @@ const originalSlash=slash;
 slash=function(angle){
   if(coopSocket&&coopSocket.readyState===1&&coopStarted){
     const attackNow=performance.now();
-    if(arena.player.downed||arena.player.attackCd>0||attackNow-coopLocalAttackAt<500)return;
+    if(arena.player.downed||arena.player.attackCd>0||attackNow-coopLocalAttackAt<480)return;
     coopLocalAttackAt=attackNow;
     arena.player.angle=angle;
     arena.player.attackAngle=angle;
@@ -1358,20 +1290,13 @@ slash=function(angle){
       burst(arena.player.x+Math.cos(angle)*35,arena.player.y+Math.sin(angle)*35,5,'slash');
       sfx('slash');
     }
-    coopSend({type:'attack',seq:++coopAttackSeq,angle,weapon});
+    coopSend({type:'attack',angle,weapon,stats:coopStats()});
     return;
   }
   arena.player.attackAngle=angle;
   originalSlash(angle)
 };
 let coopLocalAttackAt=0;
-let coopAttackSeq=0;
-let coopInputSeq=0;
-// Fixed-step local prediction + separate render position.
-// The simulation advances only when an input sample is accepted; rendering
-// follows the predicted position at 60 FPS, avoiding frame-time double movement.
-let coopPredictedX=0, coopPredictedY=0, coopRenderX=0, coopRenderY=0;
-let coopHasPredictedPosition=false;
 let arenaSimTimer=null,arenaSimLast=0,arenaSimAccum=0;
 function arenaSimulationTick(now){if(!arena.running){arenaSimLast=now;arenaSimAccum=0;return}if(!arenaSimLast)arenaSimLast=now;let elapsed=Math.max(0,Math.min(2.5,(now-arenaSimLast)/1000));arenaSimLast=now;arenaSimAccum+=elapsed;const step=1/60;let steps=0;while(arenaSimAccum>=step&&steps<150){if(coopSocket&&coopSocket.readyState===1){coopTick();coopClientVisualTick(step)}else updateArena(step);arenaSimAccum-=step;steps++}if(steps>=150)arenaSimAccum=0}
 function arenaRenderLoop(){drawArena();if(arenaModal&&!arenaModal.classList.contains('hidden'))requestAnimationFrame(arenaRenderLoop)}
