@@ -78,29 +78,175 @@ export default {
 };
 
 export class Auth {
-  constructor(state,env){this.state=state;this.env=env}
-  async hash(password,salt){const enc=new TextEncoder();const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:120000,hash:'SHA-256'},key,256);return this.b64(new Uint8Array(bits))}
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    // Auth is a SQLite-backed Durable Object. Initialize the schema once and
+    // keep every account operation transactional and deterministic.
+    state.blockConcurrencyWhile(async () => {
+      state.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS accounts (
+          username_key TEXT PRIMARY KEY,
+          username TEXT NOT NULL,
+          salt TEXT NOT NULL,
+          password_hash TEXT NOT NULL,
+          profile_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+          token TEXT PRIMARY KEY,
+          username_key TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+      `);
+    });
+  }
+
+  json(data, status=200){
+    return Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
+  }
   b64(a){let s='';for(const x of a)s+=String.fromCharCode(x);return btoa(s)}
   bytes(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return a}
-  async jsonBody(req){return req.json().catch(()=>({}))}
-  async fetch(request){const url=new URL(request.url),path=url.pathname,m=await this.jsonBody(request);const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');
-    if(path==='/api/register')return this.register(m);
-    if(path==='/api/login')return this.login(m);
-    const username=token?await this.state.storage.get('session:'+token):null;
-    if(!username)return Response.json({error:'Unauthorized'},{status:401});
-    if(path==='/api/profile')return this.profile(username);
-    if(path==='/api/profile/save')return this.save(username,m);
-    if(path==='/api/logout'){await this.state.storage.delete('session:'+token);return Response.json({ok:true})}
-    if(path==='/api/validate')return Response.json({username,profile:await this.getProfile(username)});
-    return Response.json({error:'Not found'},{status:404});
+  normalizeUsername(v){return String(v??'').trim()}
+  key(v){return this.normalizeUsername(v).toLowerCase()}
+  async jsonBody(req){try{return await req.json()}catch{return {}}}
+
+  async hash(password,salt){
+    // Web Crypto PBKDF2 is supported in Workers. A moderate work factor keeps
+    // login responsive while still preventing trivial password guessing.
+    const enc=new TextEncoder();
+    const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
+    const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:50000,hash:'SHA-256'},key,256);
+    return this.b64(new Uint8Array(bits));
   }
-  profileTemplate(){return {level:1,xp:0,rebirths:0,mult:1,stats:{maxHp:100,atk:14,spd:3.2,armor:0,crit:.08},gear:{weapon:'Rose Blade',bow:'Cupid Bow',armor:'Love Cloth',acc:'None',arrow:'Basic Arrow'},activeWeapon:'Rose Blade',activeWeaponType:'sword',skills:[],passives:[],lastLoot:null,balance:0,profileVersion:5,updatedAt:Date.now()}}
-  async register(m){const username=String(m.username||'').trim();const password=String(m.password||'');if(!/^[A-Za-z0-9_-]{3,24}$/.test(username)||password.length<6)return Response.json({error:'Kullanıcı adı 3-24 karakter olmalı; şifre en az 6 karakter olmalı.'},{status:400});const key='account:'+username.toLowerCase();if(await this.state.storage.get(key))return Response.json({error:'Bu kullanıcı adı zaten kayıtlı.'},{status:409});const salt=this.bytes(16),hash=await this.hash(password,salt),profile=this.profileTemplate();await this.state.storage.put(key,{username,salt:this.b64(salt),hash,profile});return this.issue(username,profile,true)}
-  async login(m){const username=String(m.username||'').trim(),password=String(m.password||'');if(!/^[A-Za-z0-9_-]{3,24}$/.test(username)||password.length<6)return Response.json({error:'Kullanıcı adı veya şifre hatalı.'},{status:400});const rec=await this.state.storage.get('account:'+username.toLowerCase());if(!rec)return Response.json({error:'Kullanıcı adı veya şifre hatalı.'},{status:401});let salt;try{salt=Uint8Array.from(atob(rec.salt),c=>c.charCodeAt(0))}catch{return Response.json({error:'Hesap verisi bozuk.'},{status:500})}const hash=await this.hash(password,salt);if(hash!==rec.hash)return Response.json({error:'Kullanıcı adı veya şifre hatalı.'},{status:401});return this.issue(rec.username,rec.profile||this.profileTemplate())}
-  async issue(username,profile,created=false){const a=this.bytes(32),token=this.b64(a);await this.state.storage.put('session:'+token,username,{expirationTtl:60*60*24*30});return Response.json({ok:true,token,username,profile,created})}
-  async getProfile(username){const rec=await this.state.storage.get('account:'+username.toLowerCase());return rec?.profile||null}
-  async profile(username){return Response.json({ok:true,username,profile:await this.getProfile(username)})}
-  async save(username,m){const key='account:'+username.toLowerCase(),rec=await this.state.storage.get(key);if(!rec)return Response.json({error:'Account missing'},{status:404});const old=rec.profile||this.profileTemplate();const clean={level:Math.max(1,Math.min(9999,Number(m.level)||1)),xp:Math.max(0,Math.min(1e12,Number(m.xp)||0)),rebirths:Math.max(0,Math.min(9999,Number(m.rebirths)||0)),mult:Math.max(1,Math.min(1000,Number(m.mult)||1)),stats:{maxHp:Math.max(20,Math.min(100000,Number(m.stats?.maxHp)||old.stats?.maxHp||100)),atk:Math.max(1,Math.min(10000,Number(m.stats?.atk)||old.stats?.atk||14)),spd:Math.max(.5,Math.min(20,Number(m.stats?.spd)||old.stats?.spd||3.2)),armor:Math.max(0,Math.min(1000,Number(m.stats?.armor)||old.stats?.armor||0)),crit:Math.max(0,Math.min(1,Number(m.stats?.crit)||old.stats?.crit||.08))},gear:m.gear||old.gear||{},activeWeapon:m.activeWeapon||old.activeWeapon||'Rose Blade',activeWeaponType:m.activeWeaponType||old.activeWeaponType||'sword',skills:Array.isArray(m.skills)?m.skills.slice(0,16):Array.isArray(old.skills)?old.skills.slice(0,16):[],passives:Array.isArray(m.passives)?m.passives.slice(0,32):Array.isArray(old.passives)?old.passives.slice(0,32):[],lastLoot:m.lastLoot||old.lastLoot||null,balance:Math.max(0,Math.floor(Number(m.balance)||0)),profileVersion:5,updatedAt:Date.now()};await this.state.storage.put(key,{...rec,profile:clean});return Response.json({ok:true,profile:clean})}
+  decodeB64(s){const bin=atob(String(s));const out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out}
+  constantTimeEqual(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0}
+
+  profileDefaults(){
+    return {level:1,xp:0,rebirths:0,mult:1,
+      stats:{maxHp:100,atk:14,spd:3.2,armor:0,crit:.08},
+      gear:{weapon:'Rose Blade',bow:'Cupid Bow',armor:'Love Cloth',acc:'None',arrow:'Basic Arrow'},
+      activeWeapon:'Rose Blade',activeWeaponType:'sword',skills:[],passives:[],lastLoot:null,balance:0,profileVersion:5};
+  }
+
+  async fetch(request){
+    try {
+      const url=new URL(request.url), path=url.pathname;
+      if(request.method!=='POST') return this.json({error:'Method Not Allowed'},405);
+      const m=await this.jsonBody(request);
+      const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'').trim();
+      if(path==='/api/register')return await this.register(m);
+      if(path==='/api/login')return await this.login(m);
+      const usernameKey=token?await this.sessionUser(token):null;
+      if(!usernameKey)return this.json({error:'Oturum geçersiz veya süresi dolmuş.'},401);
+      if(path==='/api/profile')return await this.profile(usernameKey);
+      if(path==='/api/profile/save')return await this.save(usernameKey,m);
+      if(path==='/api/logout'){
+        this.state.storage.sql.exec('DELETE FROM sessions WHERE token = ?',token);
+        return this.json({ok:true});
+      }
+      if(path==='/api/validate')return this.json({ok:true,username:(await this.account(usernameKey))?.username||usernameKey,profile:await this.getProfile(usernameKey)});
+      return this.json({error:'Not found'},404);
+    } catch(e) {
+      console.error('AUTH_ERROR',e?.stack||e);
+      return this.json({error:'Sunucu tarafında hesap işlemi başarısız oldu. Lütfen tekrar deneyin.'},500);
+    }
+  }
+
+  account(usernameKey){
+    const rows=this.state.storage.sql.exec('SELECT username, salt, password_hash, profile_json FROM accounts WHERE username_key = ?',usernameKey).toArray();
+    return rows[0]||null;
+  }
+  async sessionUser(token){
+    const rows=this.state.storage.sql.exec('SELECT username_key, expires_at FROM sessions WHERE token = ?',token).toArray();
+    const row=rows[0];
+    if(!row)return null;
+    if(Number(row.expires_at)<=Date.now()){
+      this.state.storage.sql.exec('DELETE FROM sessions WHERE token = ?',token);
+      return null;
+    }
+    return row.username_key;
+  }
+
+  async register(m){
+    const username=this.normalizeUsername(m.username);
+    const password=String(m.password??'');
+    if(!/^[A-Za-z0-9_-]{3,24}$/.test(username))return this.json({error:'Kullanıcı adı 3-24 karakter olmalı; sadece harf, rakam, _ ve - kullanabilirsin.'},400);
+    if(password.length<6||password.length>72)return this.json({error:'Şifre 6-72 karakter arasında olmalı.'},400);
+    const key=this.key(username);
+    if(this.account(key))return this.json({error:'Bu kullanıcı adı zaten kayıtlı.'},409);
+
+    const salt=this.bytes(16);
+    const hash=await this.hash(password,salt);
+    const now=Date.now();
+    const profile=this.profileDefaults();
+    // SQL parameters prevent username/password content from becoming SQL.
+    this.state.storage.sql.exec(
+      'INSERT INTO accounts (username_key,username,salt,password_hash,profile_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?)',
+      key,username,this.b64(salt),hash,JSON.stringify(profile),now,now
+    );
+    return this.issue(username,key,profile,true);
+  }
+
+  async login(m){
+    const username=this.normalizeUsername(m.username);
+    const password=String(m.password??'');
+    if(!/^[A-Za-z0-9_-]{3,24}$/.test(username)||password.length<1)return this.json({error:'Kullanıcı adı veya şifre hatalı.'},401);
+    const key=this.key(username);
+    const rec=this.account(key);
+    if(!rec)return this.json({error:'Kullanıcı adı veya şifre hatalı.'},401);
+    const hash=await this.hash(password,this.decodeB64(rec.salt));
+    if(!this.constantTimeEqual(hash,rec.password_hash))return this.json({error:'Kullanıcı adı veya şifre hatalı.'},401);
+    let profile;try{profile=JSON.parse(rec.profile_json)}catch{profile=this.profileDefaults();}
+    return this.issue(rec.username,key,profile,false);
+  }
+
+  issue(username,key,profile,created=false){
+    const token=this.b64(this.bytes(32));
+    const expires=Date.now()+30*24*60*60*1000;
+    this.state.storage.sql.exec('INSERT INTO sessions (token,username_key,expires_at) VALUES (?,?,?)',token,key,expires);
+    return this.json({ok:true,token,username,profile,created});
+  }
+
+  async getProfile(usernameKey){
+    const rec=this.account(usernameKey);if(!rec)return null;
+    try{return JSON.parse(rec.profile_json)}catch{return this.profileDefaults()}
+  }
+  async profile(usernameKey){
+    const rec=this.account(usernameKey);if(!rec)return this.json({error:'Account missing'},404);
+    return this.json({ok:true,username:rec.username,profile:await this.getProfile(usernameKey)});
+  }
+
+  async save(usernameKey,m){
+    const rec=this.account(usernameKey);if(!rec)return this.json({error:'Account missing'},404);
+    const old=await this.getProfile(usernameKey)||this.profileDefaults();
+    const n=(v,d)=>Number.isFinite(Number(v))?Number(v):d;
+    const clean={
+      level:Math.max(1,Math.min(9999,Math.floor(n(m.level,old.level)))),
+      xp:Math.max(0,Math.min(1e12,n(m.xp,old.xp))),
+      rebirths:Math.max(0,Math.min(9999,Math.floor(n(m.rebirths,old.rebirths)))),
+      mult:Math.max(1,Math.min(1000,n(m.mult,old.mult))),
+      stats:{
+        maxHp:Math.max(20,Math.min(100000,n(m.stats?.maxHp,old.stats.maxHp))),
+        atk:Math.max(1,Math.min(10000,n(m.stats?.atk,old.stats.atk))),
+        spd:Math.max(.5,Math.min(20,n(m.stats?.spd,old.stats.spd))),
+        armor:Math.max(0,Math.min(1000,n(m.stats?.armor,old.stats.armor))),
+        crit:Math.max(0,Math.min(1,n(m.stats?.crit,old.stats.crit)))
+      },
+      gear:(m.gear&&typeof m.gear==='object')?m.gear:(old.gear||{}),
+      activeWeapon:String(m.activeWeapon||old.activeWeapon||'Rose Blade').slice(0,80),
+      activeWeaponType:m.activeWeaponType==='bow'?'bow':'sword',
+      skills:Array.isArray(m.skills)?m.skills.slice(0,32):old.skills||[],
+      passives:Array.isArray(m.passives)?m.passives.slice(0,32):old.passives||[],
+      lastLoot:m.lastLoot??old.lastLoot??null,
+      balance:Math.max(0,Math.floor(n(m.balance,old.balance))),
+      profileVersion:5
+    };
+    this.state.storage.sql.exec('UPDATE accounts SET profile_json = ?, updated_at = ? WHERE username_key = ?',JSON.stringify(clean),Date.now(),usernameKey);
+    return this.json({ok:true,profile:clean});
+  }
 }
 
 export class Room {
