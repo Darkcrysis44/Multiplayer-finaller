@@ -11,6 +11,3 @@ bindings = [
   { name = "ROOM", class_name = "Room" }
 ]
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["Room"]
