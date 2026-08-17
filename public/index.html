@@ -1001,6 +1001,7 @@ function coopStats(){
   return {
     atk:c.atk,spd:c.spd,maxHp:c.maxHp,armor:c.armor,crit:c.crit,hp:Math.min(arena.player.hp,c.maxHp),
     skill:(arenaState.skills[0]?.id||''),
+    skills:Array.isArray(arenaState.skills)?arenaState.skills.map(s=>s?.id).filter(Boolean).slice(0,16):[],
     level:Number(arenaState.level||1),xp:Number(arenaState.xp||0),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),progressRev:Number(arenaState.lastProgressRev||0),
     passives:Array.isArray(arenaState.passives)?arenaState.passives.slice(0,32):[]
   };
@@ -1222,15 +1223,24 @@ function coopClientVisualTick(dt){
     p.slashT=Math.max(0,(p.slashT||0)-dt);
   }
   for(const e of arena.enemies){if(Number.isFinite(e.targetX)){const k=Math.min(1,dt*16);e.x+=(e.targetX-e.x)*k;e.y+=(e.targetY-e.y)*k}e.hit=Math.max(0,(e.hit||0)-dt);e.attack=Math.max(0,(e.attack||0)-dt)}
+  // Local prediction: move immediately from the same input the server receives.
+  // The authoritative snapshot below only corrects drift, so RTT is not felt as
+  // a stop/start delay while walking.
+  if(!arena.player.downed && coopStarted){
+    const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0);
+    const dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);
+    const len=Math.hypot(dx,dy)||1;
+    const speed=Number(coopServerStats?.spd||combatStats().spd||3.2);
+    if(dx||dy){arena.player.x+=dx/len*speed*60*dt;arena.player.y+=dy/len*speed*60*dt;}
+  }
   if(Number.isFinite(coopServerX)&&Number.isFinite(coopServerY)){
-    // Client prediction keeps the local player responsive; server snapshots
-    // continuously reconcile small drift instead of snapping after 180ms RTT.
+    // Reconcile gently. Large errors snap; normal errors are corrected over time.
     const ex=coopServerX-arena.player.x, ey=coopServerY-arena.player.y;
     const error=Math.hypot(ex,ey);
     if(error>90){
       arena.player.x=coopServerX; arena.player.y=coopServerY;
     }else{
-      const correction=Math.min(1,dt*(error>25?7:3.5));
+      const correction=Math.min(1,dt*(error>25?8:2.8));
       arena.player.x+=ex*correction; arena.player.y+=ey*correction;
     }
     arena.player.x=Math.max(30,Math.min(arena.w-30,arena.player.x));
@@ -1252,7 +1262,7 @@ function coopClientVisualTick(dt){
   for(const q of arena.slashes)q.t-=dt;arena.slashes=arena.slashes.filter(q=>q.t>0);
   for(const q of arena.particles){q.x+=q.vx*60*dt;q.y+=q.vy*60*dt;q.vx*=.96;q.vy*=.96;q.life-=dt}arena.particles=arena.particles.filter(q=>q.life>0);
 }
-function coopTick(){if(!coopSocket||coopSocket.readyState!==1)return;const p=arena.player,now=performance.now();if(now-coopLastNet>50){coopLastNet=now;const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0),dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);coopInput={x:dx,y:dy};coopSend({type:'input',x:dx,y:dy,angle:p.angle||0})}}
+function coopTick(){if(!coopSocket||coopSocket.readyState!==1)return;const p=arena.player,now=performance.now();if(now-coopLastNet>=50){coopLastNet=now;const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0),dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);coopInput={x:dx,y:dy};coopSend({type:'input',seq:++coopInputSeq,x:dx,y:dy,angle:p.angle||0})}}
 function showCoopStart(show){const el=$('coopStartOverlay');if(el)el.classList.toggle('hidden',!show);if(show)updateCoopLobby()}
 function updateCoopLobby(){const total=Object.keys(coopPeers).length+(coopId?1:0),st=$('coopStartStatus'),btn=$('coopStartBattle'),txt=$('coopStartText');if(st)st.textContent=coopServerPhase==='battle'?'⚔️ Battle running • '+total+' players':coopServerPhase==='upgrade'?'✨ Everyone is choosing an upgrade':'🟢 Server room • '+total+' player'+(total===1?'':'s');if(btn){btn.disabled=!coopSocket||coopSocket.readyState!==1||!(coopServerPhase==='lobby'||coopServerPhase==='gameover');btn.textContent=coopServerPhase==='gameover'?'↻ RESTART RUN':(coopServerPhase==='lobby'?'▶ START BATTLE':'⚔️ BATTLE RUNNING')}if(txt)txt.textContent='Cloudflare server controls the battle clock, enemies, waves and upgrades. No player is the host.'}
 function resetArenaRun(){arena.running=false;arena.wave=1;arena.spawned=0;arena.enemies=[];arena.projectiles=[];arena.particles=[];arena.slashes=[];resetWaveUpgrades();arena.player={x:0,y:0,targetX:0,targetY:0,hp:combatStats().maxHp,dir:1,angle:0,attackAngle:0,attackCd:0,slashT:0,inv:0,skillCd:0};resizeArena();arenaStats()}
@@ -1270,7 +1280,7 @@ const originalSlash=slash;
 slash=function(angle){
   if(coopSocket&&coopSocket.readyState===1&&coopStarted){
     const attackNow=performance.now();
-    if(arena.player.downed||arena.player.attackCd>0||attackNow-coopLocalAttackAt<480)return;
+    if(arena.player.downed||arena.player.attackCd>0||attackNow-coopLocalAttackAt<500)return;
     coopLocalAttackAt=attackNow;
     arena.player.angle=angle;
     arena.player.attackAngle=angle;
@@ -1290,13 +1300,15 @@ slash=function(angle){
       burst(arena.player.x+Math.cos(angle)*35,arena.player.y+Math.sin(angle)*35,5,'slash');
       sfx('slash');
     }
-    coopSend({type:'attack',angle,weapon,stats:coopStats()});
+    coopSend({type:'attack',seq:++coopAttackSeq,angle,weapon});
     return;
   }
   arena.player.attackAngle=angle;
   originalSlash(angle)
 };
 let coopLocalAttackAt=0;
+let coopAttackSeq=0;
+let coopInputSeq=0;
 let arenaSimTimer=null,arenaSimLast=0,arenaSimAccum=0;
 function arenaSimulationTick(now){if(!arena.running){arenaSimLast=now;arenaSimAccum=0;return}if(!arenaSimLast)arenaSimLast=now;let elapsed=Math.max(0,Math.min(2.5,(now-arenaSimLast)/1000));arenaSimLast=now;arenaSimAccum+=elapsed;const step=1/60;let steps=0;while(arenaSimAccum>=step&&steps<150){if(coopSocket&&coopSocket.readyState===1){coopTick();coopClientVisualTick(step)}else updateArena(step);arenaSimAccum-=step;steps++}if(steps>=150)arenaSimAccum=0}
 function arenaRenderLoop(){drawArena();if(arenaModal&&!arenaModal.classList.contains('hidden'))requestAnimationFrame(arenaRenderLoop)}
