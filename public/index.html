@@ -978,6 +978,23 @@ let coopClockOffset=0, coopStartTimer=null, coopOpenedFromRunning=false;
 let coopRemoteTargets={}, coopUpgradeOffer=null, coopUpgradeChosen=false, coopServerPhase='lobby';
 let coopInput={x:0,y:0};
 let coopLastServerSeq=0, coopLastServerAt=0, coopServerX=0, coopServerY=0, coopPredictionError=0;
+let coopPendingInputs=[], coopLastAckInputSeq=0, coopLastInputSentAt=0;
+const COOP_INPUT_HZ=20, COOP_INPUT_MS=1000/COOP_INPUT_HZ, COOP_RECONCILE_SOFT=18, COOP_RECONCILE_HARD=85;
+function coopReadInput(){const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0);const dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);return {x:dx,y:dy}}
+function coopPredictStep(x,y,input,dt){const len=Math.hypot(input.x,input.y)||1;const speed=Number(coopServerStats?.spd||combatStats().spd||3.2);return {x:Math.max(30,Math.min(arena.w-30,x+input.x/len*speed*60*dt)),y:Math.max(62,Math.min(arena.h-30,y+input.y/len*speed*60*dt))};}
+function coopReconcile(serverX,serverY,ackSeq){
+  if(!Number.isFinite(serverX)||!Number.isFinite(serverY))return;
+  coopLastAckInputSeq=Math.max(coopLastAckInputSeq,Number(ackSeq)||0);
+  coopPendingInputs=coopPendingInputs.filter(i=>i.seq>coopLastAckInputSeq);
+  let x=serverX,y=serverY;
+  for(const i of coopPendingInputs){const r=coopPredictStep(x,y,i,COOP_INPUT_MS/1000);x=r.x;y=r.y;}
+  const ex=x-arena.player.x,ey=y-arena.player.y,err=Math.hypot(ex,ey);
+  coopPredictionError=err;
+  if(err>COOP_RECONCILE_HARD){arena.player.x=x;arena.player.y=y}
+  else if(err>COOP_RECONCILE_SOFT){arena.player.x+=ex*.42;arena.player.y+=ey*.42}
+  // Small prediction errors are left alone; the next replayed snapshot corrects them.
+  coopServerX=serverX;coopServerY=serverY;
+}
 function coopUrl(room){const proto=location.protocol==='https:'?'wss:':'ws:';return proto+'//'+location.host+'/ws?room='+encodeURIComponent(room)}
 function coopSetStatus(t){const el=$('coopStatus');if(el)el.textContent=t}
 function coopRenderPlayers(players){
@@ -1160,6 +1177,7 @@ function coopApplyState(m){
   if(m.player){
     if(Number.isFinite(m.player.x)){coopServerX=m.player.x;arena.player.targetX=m.player.x;}
     if(Number.isFinite(m.player.y)){coopServerY=m.player.y;arena.player.targetY=m.player.y;}
+    if(Number.isFinite(m.player.inputSeq))coopReconcile(m.player.x,m.player.y,m.player.inputSeq);
     if(!Number.isFinite(arena.player.targetX))arena.player.targetX=m.player.x;
     if(!Number.isFinite(arena.player.targetY))arena.player.targetY=m.player.y;
     arena.player.hp=m.player.hp;arena.player.maxHp=m.player.maxHp||arena.player.maxHp;arena.player.angle=m.player.angle||arena.player.angle;arena.player.weapon=m.player.weapon||arena.player.weapon||'sword';arena.player.skill=m.player.skill||arena.player.skill||'';arena.player.skillCd=Number(m.player.skillCd)||0;arena.player.downed=!!m.player.downed;arena.player.reviveProgress=m.player.reviveProgress||0;
@@ -1223,28 +1241,16 @@ function coopClientVisualTick(dt){
     p.slashT=Math.max(0,(p.slashT||0)-dt);
   }
   for(const e of arena.enemies){if(Number.isFinite(e.targetX)){const k=Math.min(1,dt*16);e.x+=(e.targetX-e.x)*k;e.y+=(e.targetY-e.y)*k}e.hit=Math.max(0,(e.hit||0)-dt);e.attack=Math.max(0,(e.attack||0)-dt)}
-  // Local prediction: move immediately from the same input the server receives.
-  // The authoritative snapshot below only corrects drift, so RTT is not felt as
-  // a stop/start delay while walking.
+  // Local prediction is driven by the same fixed 20 Hz input samples sent to the server.
+  // Reconciliation replays only inputs the server has not acknowledged yet, which avoids
+  // the rubber-banding caused by mixing frame-time movement with authoritative snapshots.
   if(!arena.player.downed && coopStarted){
-    const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0);
-    const dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);
-    const len=Math.hypot(dx,dy)||1;
+    const input=coopReadInput();
     const speed=Number(coopServerStats?.spd||combatStats().spd||3.2);
-    if(dx||dy){arena.player.x+=dx/len*speed*60*dt;arena.player.y+=dy/len*speed*60*dt;}
-  }
-  if(Number.isFinite(coopServerX)&&Number.isFinite(coopServerY)){
-    // Reconcile gently. Large errors snap; normal errors are corrected over time.
-    const ex=coopServerX-arena.player.x, ey=coopServerY-arena.player.y;
-    const error=Math.hypot(ex,ey);
-    if(error>90){
-      arena.player.x=coopServerX; arena.player.y=coopServerY;
-    }else{
-      const correction=Math.min(1,dt*(error>25?8:2.8));
-      arena.player.x+=ex*correction; arena.player.y+=ey*correction;
+    if(input.x||input.y){
+      const r=coopPredictStep(arena.player.x,arena.player.y,input,dt);
+      arena.player.x=r.x;arena.player.y=r.y;
     }
-    arena.player.x=Math.max(30,Math.min(arena.w-30,arena.player.x));
-    arena.player.y=Math.max(62,Math.min(arena.h-30,arena.player.y));
   }
   arena.player.attackCd=Math.max(0,arena.player.attackCd-dt);arena.player.slashT=Math.max(0,arena.player.slashT-dt);arena.player.inv=Math.max(0,arena.player.inv-dt);arena.player.skillCd=Math.max(0,arena.player.skillCd-dt);
   // Multiplayer arrows are rendered from authoritative server snapshots.
@@ -1262,12 +1268,23 @@ function coopClientVisualTick(dt){
   for(const q of arena.slashes)q.t-=dt;arena.slashes=arena.slashes.filter(q=>q.t>0);
   for(const q of arena.particles){q.x+=q.vx*60*dt;q.y+=q.vy*60*dt;q.vx*=.96;q.vy*=.96;q.life-=dt}arena.particles=arena.particles.filter(q=>q.life>0);
 }
-function coopTick(){if(!coopSocket||coopSocket.readyState!==1)return;const p=arena.player,now=performance.now();if(now-coopLastNet>=50){coopLastNet=now;const dx=(arena.keys.d||arena.keys.ArrowRight?1:0)-(arena.keys.a||arena.keys.ArrowLeft?1:0),dy=(arena.keys.s||arena.keys.ArrowDown?1:0)-(arena.keys.w||arena.keys.ArrowUp?1:0);coopInput={x:dx,y:dy};coopSend({type:'input',seq:++coopInputSeq,x:dx,y:dy,angle:p.angle||0})}}
+function coopTick(){
+  if(!coopSocket||coopSocket.readyState!==1)return;
+  const now=performance.now();
+  if(now-coopLastInputSentAt<COOP_INPUT_MS)return;
+  coopLastInputSentAt=now;
+  const input=coopReadInput();
+  const seq=++coopInputSeq;
+  coopPendingInputs.push({seq,x:input.x,y:input.y});
+  // Keep a bounded history in case a client stalls briefly.
+  if(coopPendingInputs.length>80)coopPendingInputs.splice(0,coopPendingInputs.length-80);
+  coopSend({type:'input',seq,x:input.x,y:input.y,angle:arena.player.angle||0});
+}
 function showCoopStart(show){const el=$('coopStartOverlay');if(el)el.classList.toggle('hidden',!show);if(show)updateCoopLobby()}
 function updateCoopLobby(){const total=Object.keys(coopPeers).length+(coopId?1:0),st=$('coopStartStatus'),btn=$('coopStartBattle'),txt=$('coopStartText');if(st)st.textContent=coopServerPhase==='battle'?'⚔️ Battle running • '+total+' players':coopServerPhase==='upgrade'?'✨ Everyone is choosing an upgrade':'🟢 Server room • '+total+' player'+(total===1?'':'s');if(btn){btn.disabled=!coopSocket||coopSocket.readyState!==1||!(coopServerPhase==='lobby'||coopServerPhase==='gameover');btn.textContent=coopServerPhase==='gameover'?'↻ RESTART RUN':(coopServerPhase==='lobby'?'▶ START BATTLE':'⚔️ BATTLE RUNNING')}if(txt)txt.textContent='Cloudflare server controls the battle clock, enemies, waves and upgrades. No player is the host.'}
 function resetArenaRun(){arena.running=false;arena.wave=1;arena.spawned=0;arena.enemies=[];arena.projectiles=[];arena.particles=[];arena.slashes=[];resetWaveUpgrades();arena.player={x:0,y:0,targetX:0,targetY:0,hp:combatStats().maxHp,dir:1,angle:0,attackAngle:0,attackCd:0,slashT:0,inv:0,skillCd:0};resizeArena();arenaStats()}
 function beginCoopBattle(announce=true){if(arenaModal.classList.contains('hidden'))arenaModal.classList.remove('hidden');$('coopModal').classList.add('hidden');showCoopStart(false);arena.running=true;initArenaAudio();arenaStats();arenaLog('⚔️ Cloudflare server is running the battle.');if(announce){sendProgressionSync();coopSend({type:'startRequest',stats:coopStats()})}}
-function coopStart(){coopStarted=false;coopServerPhase='lobby';coopServerStats=null;coopLastServerSeq=0;coopLastServerAt=0;coopServerX=0;coopServerY=0;clearTimeout(coopStartTimer);resetArenaRun();showCoopStart(true);updateCoopLobby();coopConnect()}
+function coopStart(){coopStarted=false;coopServerPhase='lobby';coopServerStats=null;coopLastServerSeq=0;coopLastServerAt=0;coopServerX=0;coopServerY=0;coopPendingInputs=[];coopLastAckInputSeq=0;coopLastInputSentAt=0;coopInputSeq=0;clearTimeout(coopStartTimer);resetArenaRun();showCoopStart(true);updateCoopLobby();coopConnect()}
 $('lsaCoopBtn').onclick=()=>{coopOpenedFromRunning=!!arena.running;arena.running=false;$('coopModal').classList.remove('hidden');showCoopStart(false);coopSetStatus('Offline');updateCoopLobby()};
 $('coopClose').onclick=()=>{$('coopModal').classList.add('hidden');arena.running=false;showCoopStart(false);coopOpenedFromRunning=false};
 $('coopHost').onclick=()=>coopStart();$('coopJoin').onclick=()=>coopStart();$('coopRandom').onclick=()=>{$('coopRoom').value=Math.random().toString(36).slice(2,8).toUpperCase()};
