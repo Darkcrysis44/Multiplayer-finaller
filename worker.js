@@ -72,30 +72,12 @@ export class Room {
   async ensureAlarm(){if(this.nextTickAlarm)return;this.nextTickAlarm=Date.now()+TICK_MS;try{await this.state.storage.setAlarm(this.nextTickAlarm)}catch{this.nextTickAlarm=null}}
   async alarm(){this.nextTickAlarm=null;const now=Date.now();this.tick(now);if(this.sockets.size)await this.ensureAlarm()}
   message(id,m){const p=this.players.get(id);if(!p)return;
-    if(m.type==='join'){
-      p.name=String(m.name||'Player').slice(0,20)||'Player';
-      this.setStats(p,m.stats);
-      if(m.progression){
-        p.level=clamp(Number(m.progression.level)||p.level,1,9999);
-        p.xp=clamp(Number(m.progression.xp)||0,0,1e12);
-        p.rebirths=clamp(Number(m.progression.rebirths)||p.rebirths,0,9999);
-        p.mult=clamp(Number(m.progression.mult)||p.mult,1,1000);
-        p.progressRev=clamp(Number(m.progression.progressRev)||p.progressRev,0,1e9);
-        if(m.progression.stats)this.setStats(p,m.progression.stats);
-      }
-      this.broadcastPlayers();this.broadcastState(true);return;
-    }
+    if(m.type==='join'){p.name=String(m.name||'Player').slice(0,20)||'Player';this.setStats(p,m.stats);if(m.progression){p.level=clamp(Number(m.progression.level)||p.level,1,9999);p.xp=clamp(Number(m.progression.xp)||0,0,1e12);p.rebirths=clamp(Number(m.progression.rebirths)||p.rebirths,0,9999);p.mult=clamp(Number(m.progression.mult)||p.mult,1,1000);p.progressRev=clamp(Number(m.progression.progressRev)||p.progressRev,0,1e9);}this.broadcastPlayers();this.broadcastState(true);return;}
     if(m.type==='progressSync' && m.progression){
       const pr=m.progression;
       const rev=clamp(Number(pr.progressRev)||0,0,1e9);
       if(rev>=p.progressRev){
-        p.level=clamp(Number(pr.level)||p.level,1,9999);
-        p.xp=clamp(Number(pr.xp)||0,0,1e12);
-        p.rebirths=clamp(Number(pr.rebirths)||p.rebirths,0,9999);
-        p.mult=clamp(Number(pr.mult)||p.mult,1,1000);
-        // Progression stats are already persisted by the client profile.
-        // Never apply level-up deltas a second time on reconnect/sync.
-        if(pr.stats)this.setStats(p,pr.stats);
+        p.level=clamp(Number(pr.level)||p.level,1,9999);p.xp=clamp(Number(pr.xp)||0,0,1e12);p.rebirths=clamp(Number(pr.rebirths)||p.rebirths,0,9999);p.mult=clamp(Number(pr.mult)||p.mult,1,1000);
         p.progressRev=rev;
         this.send(id,{type:'progression',progression:this.progression(p)});this.broadcastState(true);
       }
@@ -209,48 +191,71 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     if(p.skillCd>0)return;
     const requestedSkill=String(m.skill||p.skill||'');
     if(p.skills.length && !p.skills.includes(requestedSkill))return;
-    const SKILL_ALIASES={
-      nova:'nova', dash:'dash', barrage:'barrage', moon:'moon', storm:'storm',
-      bloom:'moon', break:'barrage', eclipse:'storm', divine:'nova', cataclysm:'moon'
-    };
-    const skill=SKILL_ALIASES[requestedSkill]||'';
+    const valid=new Set(['nova','dash','barrage','moon','storm','bloom','break','eclipse','divine','cataclysm']);
+    if(!valid.has(requestedSkill))return;
     const angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;
     p.angle=angle;
-    const stats=p.atk;
-    const defs={nova:{cd:8},dash:{cd:5},barrage:{cd:10},moon:{cd:7},storm:{cd:12}};
-    if(!skill)return;
-    p.skillCd=defs[skill].cd;
+    const stats=clamp(p.atk,1,10000);
+    const defs={nova:8,dash:5,barrage:10,moon:7,storm:12,bloom:7,break:10,eclipse:12,divine:8,cataclysm:7};
+    p.skillCd=defs[requestedSkill];
     const hitIds=[];
-    const damage=(e,mult)=>{if(!e||e.hp<=0)return;let d=stats*mult;if(Math.random()<p.crit)d*=2;e.hp=Math.max(0,e.hp-d);e.hit=.12;hitIds.push({id:e.id,damage:d});};
-    if(skill==='nova'){
-      for(const e of this.enemies)if(dist(e,p)<190)damage(e,3);
-      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
-    }else if(skill==='barrage'){
-      for(let j=-2;j<=2;j++){
-        const a=angle+j*.18;
-        for(const e of this.enemies){
-          const dx=e.x-p.x,dy=e.y-p.y,d=Math.hypot(dx,dy);
-          let da=Math.atan2(dy,dx)-a;da=Math.atan2(Math.sin(da),Math.cos(da));
-          if(d<165&&Math.abs(da)<.65)damage(e,2.2);
-        }
+    const damage=(e,mult)=>{
+      if(!e||e.hp<=0)return;
+      let d=stats*mult;
+      if(Math.random()<p.crit)d*=2;
+      if(e.shieldT>0)d*=.35;
+      e.hp=Math.max(0,e.hp-d);e.hit=.12;
+      hitIds.push({id:e.id,damage:d});
+    };
+    const radial=(radius,mult)=>{for(const e of this.enemies)if(dist(e,p)<radius)damage(e,mult)};
+    const cone=(range,width,mult)=>{
+      const ca=Math.cos(angle),sa=Math.sin(angle);
+      for(const e of this.enemies){
+        const rx=e.x-p.x,ry=e.y-p.y,along=rx*ca+ry*sa;
+        if(along<0||along>range)continue;
+        const side=Math.abs(-rx*sa+ry*ca),radius=(e.r||20)+30;
+        if(side>radius)continue;
+        let da=Math.atan2(ry,rx)-angle;da=Math.atan2(Math.sin(da),Math.cos(da));
+        if(Math.abs(da)<=width)damage(e,mult);
       }
-      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
-    }else if(skill==='moon'){
-      const proj={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*7,vy:Math.sin(angle)*7,angle,life:2.2,damage:stats*5,skill:'moon',radius:18};
-      this.projectiles.push(proj);
-      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,projectile:proj,serverNow:now});
-    }else if(skill==='storm'){
-      for(const e of this.enemies)if(dist(e,p)<260)damage(e,2.5);
-      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
-    }else if(skill==='dash'){
-      p.x=clamp(p.x+Math.cos(angle)*180,30,WIDTH-30);p.y=clamp(p.y+Math.sin(angle)*180,62,HEIGHT-30);
-      for(const e of this.enemies)if(dist(e,p)<75)damage(e,2);
-      this.broadcast({type:'skillFx',skill:requestedSkill,baseSkill:skill,from:p.id,x:p.x,y:p.y,angle,hitIds,serverNow:now});
+    };
+    let projectile=null;
+    if(requestedSkill==='nova')radial(190,3);
+    else if(requestedSkill==='dash'){
+      p.x=clamp(p.x+Math.cos(angle)*180,30,WIDTH-30);
+      p.y=clamp(p.y+Math.sin(angle)*180,62,HEIGHT-30);
+      radial(75,2);
+    }else if(requestedSkill==='barrage'){
+      for(let j=-2;j<=2;j++){
+        const aa=angle+j*.18,old=angle;p.angle=aa;cone(165,.65,2.2);p.angle=old;
+      }
+    }else if(requestedSkill==='moon'){
+      projectile={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*7,vy:Math.sin(angle)*7,angle,life:2.2,damage:stats*5,skill:'moon',radius:18};
+      this.projectiles.push(projectile);
+    }else if(requestedSkill==='storm'){
+      radial(260,2.5);
+    }else if(requestedSkill==='bloom'){
+      radial(155,3.5);
+      p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.12);
+    }else if(requestedSkill==='break'){
+      cone(220,.55,4);
+    }else if(requestedSkill==='eclipse'){
+      radial(320,3.8);
+    }else if(requestedSkill==='divine'){
+      radial(240,5);
+      p.hp=Math.min(p.maxHp,p.hp+p.maxHp*.20);
+    }else if(requestedSkill==='cataclysm'){
+      projectile={id:'s'+(++this.attackSeq),owner:p.id,x:p.x,y:p.y,vx:Math.cos(angle)*6,vy:Math.sin(angle)*6,angle,life:2.8,damage:stats*8,skill:'cataclysm',radius:28};
+      this.projectiles.push(projectile);
     }
     for(const h of hitIds){
       const e=this.enemies.find(q=>q.id===h.id);
       if(e&&e.hp<=0)this.killEnemy(e,p.id);
     }
+    this.broadcast({
+      type:'skillFx',skill:requestedSkill,from:p.id,x:p.x,y:p.y,angle,
+      hitIds,projectile,serverNow:now
+    });
     this.broadcastState(true);
   }
   serverAttack(p,m){

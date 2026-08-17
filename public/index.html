@@ -779,20 +779,26 @@ function applyProgressionSnapshot(pr,source='sync'){
   if(!pr)return;
   const nextLevel=Math.max(1,Number(pr.level)||1), nextXp=Math.max(0,Number(pr.xp)||0);
   const oldLevel=Math.max(1,Number(arenaState.level)||1);
-  if(nextLevel>oldLevel){
-    sfx('level');toast('LEVEL UP! ✨ Lv '+nextLevel);arenaLog('Level '+nextLevel+' synced from '+source+'.');
-  }
-  arenaState.level=nextLevel;arenaState.xp=nextXp;arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
+  arenaState.level=nextLevel;
+  arenaState.xp=nextXp;
+  arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
   if(Number.isFinite(Number(pr.rebirths)))arenaState.rebirths=Math.max(0,Number(pr.rebirths));
   if(Number.isFinite(Number(pr.mult)))arenaState.mult=Math.max(1,Number(pr.mult));
+  // The server snapshot is authoritative. Never re-apply level-up deltas here.
+  // Re-applying them was the cause of stats growing every time a player rejoined.
   if(pr.stats&&source==='server'){
-    // Server is authoritative for already-persisted combat stats. Never
-    // re-apply the per-level increment here, or reconnecting would inflate stats.
-    arenaState.stats.maxHp=Math.max(20,Number(pr.stats.maxHp)||arenaState.stats.maxHp);
-    arenaState.stats.atk=Math.max(1,Number(pr.stats.atk)||arenaState.stats.atk);
-    arenaState.stats.spd=Math.max(.5,Number(pr.stats.spd)||arenaState.stats.spd);
-    arenaState.stats.armor=Math.max(0,Number(pr.stats.armor)||arenaState.stats.armor);
-    arenaState.stats.crit=Math.max(0,Math.min(.95,Number(pr.stats.crit)));
+    const s=pr.stats;
+    if(Number.isFinite(Number(s.maxHp)))arenaState.stats.maxHp=Math.max(20,Number(s.maxHp));
+    if(Number.isFinite(Number(s.atk)))arenaState.stats.atk=Math.max(1,Number(s.atk));
+    if(Number.isFinite(Number(s.spd)))arenaState.stats.spd=Math.max(.5,Number(s.spd));
+    if(Number.isFinite(Number(s.armor)))arenaState.stats.armor=Math.max(0,Number(s.armor));
+    if(Number.isFinite(Number(s.crit)))arenaState.stats.crit=Math.max(0,Number(s.crit));
+    arena.player.hp=Math.min(Number(arenaState.stats.maxHp)||100,Number(arena.player.hp)||Number(arenaState.stats.maxHp)||100);
+    if(nextLevel>oldLevel){sfx('level');toast('LEVEL UP! ✨ Lv '+nextLevel);arenaLog('Level '+nextLevel+' synced from server.');}
+  }else if(nextLevel>oldLevel){
+    // Solo owns its own progression and performs the stat increment in gainXp().
+    arena.player.hp=arenaState.stats.maxHp;
+    sfx('level');toast('LEVEL UP! ✨ Lv '+nextLevel);
   }
   saveArena();arenaStats();
 }
@@ -1113,18 +1119,34 @@ function coopHandle(m){
   if(m.type==='skillFx'){
     const p=coopPeers[m.from];
     const a=Number.isFinite(m.angle)?m.angle:0;
-    const baseSkill=m.baseSkill||({bloom:'moon',break:'barrage',eclipse:'storm',divine:'nova',cataclysm:'moon'}[m.skill]||m.skill);
-    if(p){p.angle=a;p.targetAngle=a;p.attackAngle=a;p.slashT=baseSkill==='dash'?0:.25;p.skill=m.skill;}
-    if(baseSkill==='moon' && m.projectile){
-      const q=m.projectile;
-      if(!arena.projectiles.some(x=>x.id===q.id))arena.projectiles.push({id:q.id,x:q.x,y:q.y,targetX:q.x,targetY:q.y,vx:q.vx,vy:q.vy,life:q.life,damage:0,angle:q.angle,owner:q.owner===coopId?'coopArrow':'remoteArrow',kind:'playerSkillArrow'});
+    const id=String(m.skill||'');
+    if(p){
+      p.angle=a;p.targetAngle=a;p.attackAngle=a;p.slashT=id==='dash'?0:.28;p.skill=id;
+      if(id==='dash'&&Number.isFinite(m.x)&&Number.isFinite(m.y)){p.targetX=m.x;p.targetY=m.y;}
     }
-    if(baseSkill==='nova'){burst(m.x,m.y,40,'death');sfx('level');}
-    else if(baseSkill==='barrage'){for(let j=-2;j<=2;j++)arena.slashes.push({x:m.x,y:m.y,angle:a+j*.18,t:.35,maxT:.35,remote:true});burst(m.x,m.y,35,'slash');sfx('level');}
-    else if(baseSkill==='storm'){burst(m.x,m.y,45,'death');sfx('level');}
-    else if(baseSkill==='dash'){burst(m.x,m.y,28,'slash');sfx('slash');}
-    else if(baseSkill==='moon'){arena.slashes.push({x:m.x,y:m.y,angle:a,t:.35,maxT:.35,remote:true});burst(m.x+Math.cos(a)*30,m.y+Math.sin(a)*30,24,'slash');sfx('level');}
-    if(Array.isArray(m.hitIds))for(const hit of m.hitIds){const e=arena.enemies.find(x=>x.id===hit.id);if(e){e.hp=Math.max(0,e.hp-(Number(hit.damage)||0));e.hit=.15;}}
+    if(m.projectile){
+      const q=m.projectile;
+      if(!arena.projectiles.some(x=>x.id===q.id)){
+        arena.projectiles.push({id:q.id,x:q.x,y:q.y,targetX:q.x,targetY:q.y,vx:q.vx,vy:q.vy,life:q.life,damage:0,angle:q.angle,owner:q.owner===coopId?'coopArrow':'remoteArrow',kind:'playerSkillArrow',radius:q.radius||18,skillId:id});
+      }
+    }
+    const fx={
+      nova:()=>{burst(m.x,m.y,40,'death');sfx('level')},
+      dash:()=>{burst(m.x,m.y,30,'slash');sfx('slash')},
+      barrage:()=>{for(let j=-2;j<=2;j++)arena.slashes.push({x:m.x,y:m.y,angle:a+j*.18,t:.35,maxT:.35,remote:true});burst(m.x,m.y,35,'slash');sfx('level')},
+      moon:()=>{arena.slashes.push({x:m.x,y:m.y,angle:a,t:.35,maxT:.35,remote:true});burst(m.x+Math.cos(a)*30,m.y+Math.sin(a)*30,24,'slash');sfx('level')},
+      storm:()=>{burst(m.x,m.y,45,'death');sfx('level')},
+      bloom:()=>{burst(m.x,m.y,55,'death');sfx('level')},
+      break:()=>{arena.slashes.push({x:m.x,y:m.y,angle:a,t:.45,maxT:.45,remote:true});burst(m.x+Math.cos(a)*80,m.y+Math.sin(a)*80,42,'slash');sfx('slash')},
+      eclipse:()=>{arena.shake=18;burst(m.x,m.y,70,'death');sfx('level')},
+      divine:()=>{arena.shake=22;burst(m.x,m.y,70,'death');sfx('rebirth')},
+      cataclysm:()=>{arena.slashes.push({x:m.x,y:m.y,angle:a,t:.5,maxT:.5,remote:true});burst(m.x+Math.cos(a)*45,m.y+Math.sin(a)*45,55,'slash');sfx('rebirth')}
+    };
+    if(fx[id])fx[id]();
+    if(Array.isArray(m.hitIds))for(const hit of m.hitIds){
+      const e=arena.enemies.find(x=>x.id===hit.id);
+      if(e){e.hp=Math.max(0,e.hp-(Number(hit.damage)||0));e.hit=.15;}
+    }
     return;
   }
   if(m.type==='fx'){
@@ -1380,10 +1402,62 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)arenaSimul
 function arenaLoop(){if(!arenaSimTimer)startArenaSimulation();arenaRenderLoop()}
 function startArena(){initArenaAudio();arenaModal.classList.remove('hidden');$('lsaArchive').classList.add('hidden');resetArenaRun();arena.running=true;arenaStats();arenaLog('Enter the arena. Broken-heart fighters are coming...');requestAnimationFrame(arenaLoop)}
 function endArena(){arena.running=false;arenaModal.classList.add('hidden');showCoopStart(false);coopStarted=false;try{if(coopSocket)coopSocket.close()}catch(e){}coopSocket=null;coopId=null;coopPeers={};coopServerStats=null;coopServerPhase='lobby';saveArena()}
-function useSkill(){const sk=arenaState.skills[0];if(!arena.running||!sk||arena.player.skillCd>0)return;const p=arena.player;if(coopSocket&&coopSocket.readyState===1&&coopStarted){const skId=sk.id;const a=Number.isFinite(p.angle)?p.angle:0;
-      coopSend({type:'skill',skill:skId,angle:a});
-      const skillCdMap={nova:8,dash:5,barrage:10,moon:7,storm:12,bloom:7,break:10,eclipse:12,divine:8,cataclysm:7};
-      arena.player.skillCd=skillCdMap[skId]||5;toast(sk.name+' ✨');return;}if(sk.id==='nova'){arena.player.skillCd=8;const cs=combatStats();arena.shake=12;for(const e of [...arena.enemies]){const d=Math.hypot(e.x-p.x,e.y-p.y);if(d<190){damageEnemy(e,cs.atk*3)}}burst(p.x,p.y,40,'death');sfx('level');toast('HEART NOVA! 💗')}else if(sk.id==='barrage'){arena.player.skillCd=10;const cs=combatStats();for(let j=-2;j<=2;j++){const a=p.angle+j*.18;arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});for(const e of [...arena.enemies]){const dd=Math.hypot(e.x-p.x,e.y-p.y);let da=Math.atan2(e.y-p.y,e.x-p.x)-a;da=Math.atan2(Math.sin(da),Math.cos(da));if(dd<165&&Math.abs(da)<.65)damageEnemy(e,cs.atk*2.2)}}burst(p.x,p.y,35,'slash');sfx('level');toast('ROSE BARRAGE! 🌹')}else if(sk.id==='moon'){arena.player.skillCd=7;const cs=combatStats();const a=p.angle;arena.projectiles.push({x:p.x,y:p.y,vx:Math.cos(a)*7,vy:Math.sin(a)*7,life:2.2,damage:cs.atk*5,angle:a,owner:'playerSkill',wide:true});arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});burst(p.x+Math.cos(a)*30,p.y+Math.sin(a)*30,24,'slash');sfx('level');toast('MOON SLASH! 🌙')}else if(sk.id==='storm'){arena.player.skillCd=12;const cs=combatStats();for(let i=0;i<10;i++){const a=Math.random()*Math.PI*2,d=70+Math.random()*220;arena.projectiles.push({x:p.x+Math.cos(a)*d,y:p.y+Math.sin(a)*d,vx:0,vy:0,life:1.0,damage:cs.atk*1.5,angle:a,owner:'playerSkill',rain:true,t:0});}for(const e of [...arena.enemies]){if(Math.hypot(e.x-p.x,e.y-p.y)<260)damageEnemy(e,cs.atk*2.5)}burst(p.x,p.y,45,'death');sfx('level');toast('HEARTSTORM! 💞')}else if(sk.id==='dash'){arena.player.skillCd=5;const cs=combatStats();const nx=p.x+Math.cos(p.angle)*180,ny=p.y+Math.sin(p.angle)*180;p.x=Math.max(30,Math.min(arena.w-30,nx));p.y=Math.max(62,Math.min(arena.h-30,ny));arena.slashes.push({x:p.x,y:p.y,angle:p.angle,t:.3});for(const e of [...arena.enemies]){if(Math.hypot(e.x-p.x,e.y-p.y)<75)damageEnemy(e,cs.atk*2)}burst(p.x,p.y,28,'slash');sfx('slash');toast('LOVE DASH! ✨')}arenaStats()}
+function useSkill(){
+  const sk=arenaState.skills[0];
+  if(!arena.running||!sk||arena.player.skillCd>0)return;
+  const p=arena.player, id=String(sk.id||'');
+  const cs=combatStats(), a=Number.isFinite(p.angle)?p.angle:0;
+  const cooldown={nova:8,dash:5,barrage:10,moon:7,storm:12,bloom:7,break:10,eclipse:12,divine:8,cataclysm:7}[id]||5;
+
+  if(coopSocket&&coopSocket.readyState===1&&coopStarted){
+    coopSend({type:'skill',skill:id,angle:a});
+    p.skillCd=cooldown; toast(sk.name+' ✨'); return;
+  }
+
+  p.skillCd=cooldown;
+  const hit=(e,m)=>damageEnemy(e,cs.atk*m);
+  if(id==='nova'){
+    for(const e of [...arena.enemies])if(Math.hypot(e.x-p.x,e.y-p.y)<190)hit(e,3);
+    burst(p.x,p.y,40,'death');sfx('level');toast('LOVE SPARK! 💗');
+  }else if(id==='dash'){
+    const nx=p.x+Math.cos(a)*180,ny=p.y+Math.sin(a)*180;
+    p.x=Math.max(30,Math.min(arena.w-30,nx));p.y=Math.max(62,Math.min(arena.h-30,ny));
+    for(const e of [...arena.enemies])if(Math.hypot(e.x-p.x,e.y-p.y)<75)hit(e,2);
+    arena.slashes.push({x:p.x,y:p.y,angle:a,t:.3});burst(p.x,p.y,28,'slash');sfx('slash');toast('QUICK KISS! ✨');
+  }else if(id==='barrage'){
+    for(let j=-2;j<=2;j++){const aa=a+j*.18;arena.slashes.push({x:p.x,y:p.y,angle:aa,t:.35});
+      for(const e of [...arena.enemies]){const d=Math.hypot(e.x-p.x,e.y-p.y);let da=Math.atan2(e.y-p.y,e.x-p.x)-aa;da=Math.atan2(Math.sin(da),Math.cos(da));if(d<165&&Math.abs(da)<.65)hit(e,2.2)}}
+    burst(p.x,p.y,35,'slash');sfx('level');toast('ROSE BARRAGE! 🌹');
+  }else if(id==='moon'){
+    arena.projectiles.push({x:p.x,y:p.y,vx:Math.cos(a)*7,vy:Math.sin(a)*7,life:2.2,damage:cs.atk*5,angle:a,owner:'playerSkill',wide:true,skillId:id});
+    arena.slashes.push({x:p.x,y:p.y,angle:a,t:.35});burst(p.x+Math.cos(a)*30,p.y+Math.sin(a)*30,24,'slash');sfx('level');toast('MOON SLASH! 🌙');
+  }else if(id==='storm'){
+    for(let i=0;i<10;i++){const aa=Math.random()*Math.PI*2,d=70+Math.random()*220;arena.projectiles.push({x:p.x+Math.cos(aa)*d,y:p.y+Math.sin(aa)*d,vx:0,vy:0,life:1,damage:cs.atk*1.5,angle:aa,owner:'playerSkill',rain:true,t:0,skillId:id});}
+    for(const e of [...arena.enemies])if(Math.hypot(e.x-p.x,e.y-p.y)<260)hit(e,2.5);
+    burst(p.x,p.y,45,'death');sfx('level');toast('HEARTSTORM! 💞');
+  }else if(id==='bloom'){
+    for(const e of [...arena.enemies])if(Math.hypot(e.x-p.x,e.y-p.y)<155)hit(e,3.5);
+    p.hp=Math.min(arenaState.stats.maxHp,p.hp+arenaState.stats.maxHp*.12);
+    burst(p.x,p.y,50,'death');sfx('level');toast('LUNAR BLOOM! 💫');
+  }else if(id==='break'){
+    for(const e of [...arena.enemies]){
+      const d=Math.hypot(e.x-p.x,e.y-p.y);let da=Math.atan2(e.y-p.y,e.x-p.x)-a;da=Math.atan2(Math.sin(da),Math.cos(da));
+      if(d<220&&Math.abs(da)<.55)hit(e,4);
+    }
+    arena.slashes.push({x:p.x,y:p.y,angle:a,t:.45});burst(p.x+Math.cos(a)*80,p.y+Math.sin(a)*80,42,'slash');sfx('slash');toast('PASSION BREAK! 💥');
+  }else if(id==='eclipse'){
+    for(const e of [...arena.enemies])if(Math.hypot(e.x-p.x,e.y-p.y)<320)hit(e,3.8);
+    arena.shake=18;burst(p.x,p.y,70,'death');sfx('level');toast('HEART ECLIPSE! 🌌');
+  }else if(id==='divine'){
+    for(const e of [...arena.enemies])if(Math.hypot(e.x-p.x,e.y-p.y)<240)hit(e,5);
+    p.hp=Math.min(arenaState.stats.maxHp,p.hp+arenaState.stats.maxHp*.20);
+    arena.shake=22;burst(p.x,p.y,70,'death');sfx('rebirth');toast('DIVINE LOVE! 👑');
+  }else if(id==='cataclysm'){
+    arena.projectiles.push({x:p.x,y:p.y,vx:Math.cos(a)*6,vy:Math.sin(a)*6,life:2.8,damage:cs.atk*8,angle:a,owner:'playerSkill',wide:true,radius:28,skillId:id});
+    arena.slashes.push({x:p.x,y:p.y,angle:a,t:.5});burst(p.x+Math.cos(a)*45,p.y+Math.sin(a)*45,55,'slash');sfx('rebirth');toast('ROSE CATACLYSM! 🔥');
+  }
+  arenaStats();
+}
 const shopItems=[
  ['⚔️','Crimson Rose Blade','Attack +8',90,'sword','Crimson Rose Blade',()=>arenaState.stats.atk+=8*arenaState.mult],
  ['✨','Soul Edge','Attack +18 • Crit +5%',300,'sword','Soul Edge',()=>{arenaState.stats.atk+=18*arenaState.mult;arenaState.stats.crit+=.05}],
@@ -1457,81 +1531,6 @@ document.querySelectorAll('.lsa-shop-tab').forEach(b=>b.onclick=()=>renderShop(b
 window.addEventListener('keydown',e=>{if(arenaModal.classList.contains('hidden'))return;arena.keys[e.key]=true;if(e.code==='Space'){e.preventDefault();slash(arena.player.angle)}if(e.key==='1'){arenaState.activeWeapon=arenaState.gear.weapon||'Rose Blade';arenaState.activeWeaponType='sword';saveArena();arenaStats()}if(e.key==='2'){arenaState.activeWeapon=arenaState.gear.bow||'Cupid Bow';arenaState.activeWeaponType='bow';saveArena();arenaStats()}if(e.key.toLowerCase()==='r'){e.preventDefault();useSkill()}});window.addEventListener('keyup',e=>{arena.keys[e.key]=false});
 arenaCanvas.addEventListener('mousedown',e=>{const r=arenaCanvas.getBoundingClientRect();const x=e.clientX-r.left,y=e.clientY-r.top;arena.mouseX=x;arena.mouseY=y;slash(Math.atan2(y-arena.player.y,x-arena.player.x))});
 $('lsaSkillUse').onclick=useSkill;arenaCanvas.addEventListener('touchstart',e=>{const t=e.touches[0],r=arenaCanvas.getBoundingClientRect();slash(Math.atan2(t.clientY-r.top-arena.player.y,t.clientX-r.left-arena.player.x))},{passive:true});
-
-
-/* ===== ACCOUNT / PROFILE LAYER (deploy-safe, no Durable Object migration) ===== */
-(function(){
-  const KEY='lsaAccountsV1', ACTIVE='lsaActiveUserV1';
-  function read(){try{return JSON.parse(localStorage.getItem(KEY)||'{}')||{}}catch{return{}}}
-  function write(x){localStorage.setItem(KEY,JSON.stringify(x))}
-  async function hash(s){
-    const b=new TextEncoder().encode(String(s));
-    const d=await crypto.subtle.digest('SHA-256',b);
-    return Array.from(new Uint8Array(d)).map(x=>x.toString(16).padStart(2,'0')).join('');
-  }
-  function profileKey(u){return 'lsaProfile:'+u}
-  function saveProfileFor(u){
-    if(!u||typeof arenaState==='undefined')return;
-    const p={level:arenaState.level,xp:arenaState.xp,rebirths:arenaState.rebirths,mult:arenaState.mult,
-      stats:arenaState.stats,gear:arenaState.gear,activeWeapon:arenaState.activeWeapon,activeWeaponType:arenaState.activeWeaponType,
-      skills:arenaState.skills,passives:arenaState.passives,lastLoot:arenaState.lastLoot,profileVersion:4};
-    localStorage.setItem(profileKey(u),JSON.stringify(p));
-  }
-  function loadProfileFor(u){
-    try{
-      const p=JSON.parse(localStorage.getItem(profileKey(u))||'null');
-      if(!p)return;
-      arenaState.level=Math.max(1,Number(p.level)||1);arenaState.xp=Math.max(0,Number(p.xp)||0);
-      arenaState.rebirths=Math.max(0,Number(p.rebirths)||0);arenaState.mult=Math.max(1,Number(p.mult)||1);
-      arenaState.stats=Object.assign({},arenaBase,p.stats||{});
-      arenaState.gear=Object.assign({weapon:'Rose Blade',bow:'Cupid Bow',armor:'Love Cloth',acc:'None',arrow:'Basic Arrow'},p.gear||{});
-      arenaState.activeWeapon=p.activeWeapon||arenaState.gear.weapon;arenaState.activeWeaponType=p.activeWeaponType||'sword';
-      arenaState.skills=Array.isArray(p.skills)?p.skills:[];arenaState.passives=Array.isArray(p.passives)?p.passives:[];
-      arenaState.lastLoot=p.lastLoot||null;arenaState.lastProgressRev=Number(p.lastProgressRev)||0;
-      saveArena(); arenaStats();
-    }catch{}
-  }
-  function current(){return localStorage.getItem(ACTIVE)||''}
-  function setActive(u){localStorage.setItem(ACTIVE,u);loadProfileFor(u)}
-  function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-  const style=document.createElement('style');style.textContent=`
-    #lsaAccount{position:fixed;inset:0;background:#070b14ee;z-index:99999;display:grid;place-items:center;font-family:Arial,sans-serif}
-    #lsaAccount.hidden{display:none}#lsaAccount .box{width:min(92vw,420px);padding:28px;border:1px solid #ff9db866;border-radius:22px;background:linear-gradient(145deg,#241020,#130b17);box-shadow:0 25px 80px #000b}
-    #lsaAccount h2{margin:0 0 8px;text-align:center;color:#ff9db8}#lsaAccount p{text-align:center;color:#d9b5c3;font-size:13px}
-    #lsaAccount input{width:100%;margin:7px 0;padding:13px;border-radius:12px;border:1px solid #ffffff22;background:#ffffff0b;color:#fff;outline:none}
-    #lsaAccount button{width:100%;margin-top:8px;padding:12px;border:0;border-radius:12px;background:#ff668f;color:#fff;font-weight:700;cursor:pointer}
-    #lsaAccount .secondary{background:#ffffff12}#lsaAccount .msg{min-height:20px;text-align:center;color:#ffd0dd;font-size:13px;margin-top:8px}
-    #lsaAccount .user{color:#fff;text-align:center;margin-bottom:10px}
-  `;document.head.appendChild(style);
-  const overlay=document.createElement('div');overlay.id='lsaAccount';overlay.innerHTML=`<div class="box">
-    <h2>♡ Love Sword Arena</h2><p>Username ile hesabına gir. Level ve statların bu hesapta saklanır.</p>
-    <input id="lsaUser" maxlength="20" autocomplete="username" placeholder="Username">
-    <input id="lsaPass" type="password" maxlength="64" autocomplete="current-password" placeholder="Password">
-    <button id="lsaLogin">Giriş Yap</button><button id="lsaRegister" class="secondary">Yeni Hesap Oluştur</button>
-    <div class="msg" id="lsaAccountMsg"></div>
-  </div>`;document.body.appendChild(overlay);
-  const msg=t=>document.getElementById('lsaAccountMsg').textContent=t;
-  async function register(){
-    const u=document.getElementById('lsaUser').value.trim().toLowerCase(),p=document.getElementById('lsaPass').value;
-    if(!/^[a-z0-9_]{3,20}$/.test(u))return msg('Username 3-20 karakter: a-z, 0-9, _.');
-    if(p.length<4)return msg('Şifre en az 4 karakter olmalı.');
-    const a=read();if(a[u])return msg('Bu username zaten var.');
-    a[u]={passwordHash:await hash(p),createdAt:Date.now()};write(a);setActive(u);overlay.classList.add('hidden');msg('');saveProfileFor(u);
-  }
-  async function login(){
-    const u=document.getElementById('lsaUser').value.trim().toLowerCase(),p=document.getElementById('lsaPass').value,a=read();
-    if(!a[u]||a[u].passwordHash!==await hash(p))return msg('Username veya şifre yanlış.');
-    setActive(u);overlay.classList.add('hidden');msg('');if(typeof saveArena==='function')saveArena();
-  }
-  document.getElementById('lsaRegister').onclick=register;document.getElementById('lsaLogin').onclick=login;
-  window.lsaAccount={current,save:()=>saveProfileFor(current())};
-  // Wrap saveArena so every existing save point also persists to the active account.
-  const originalSave=saveArena;
-  window.saveArena=saveArena=function(){originalSave();saveProfileFor(current())};
-  // On load, if an account exists restore its exact persisted stats; do not award levels here.
-  const u=current();
-  if(u){loadProfileFor(u);overlay.classList.add('hidden')}
-})();
 
 </script>
 </body>
