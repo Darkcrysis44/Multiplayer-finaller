@@ -1,4 +1,4 @@
-name = "multiplayer-finaller"
+name = "multiplayer-game1"
 main = "worker.js"
 compatibility_date = "2026-08-16"
 
@@ -8,14 +8,9 @@ binding = "ASSETS"
 
 [durable_objects]
 bindings = [
-  { name = "ROOM", class_name = "Room" },
-  { name = "AUTH", class_name = "Auth" }
+  { name = "ROOM", class_name = "Room" }
 ]
 
-[exports.Room]
-type = "durable-object"
-storage = "sqlite"
-
-[exports.Auth]
-type = "durable-object"
-storage = "sqlite"
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

@@ -35,88 +35,55 @@ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const cleanRoom=s=>String(s||'LOVE').toUpperCase().replace(/[^A-Z0-9_-]/g,'').slice(0,24)||'LOVE';
 
-async function authCall(env, path, body, token=''){
-  const id=env.AUTH.idFromName('AUTH');
-  const stub=env.AUTH.get(id);
+async function authCall(env,path,body,token='') {
+  const stub=env.ROOM.get(env.ROOM.idFromName('AUTH'));
   const headers={'Content-Type':'application/json'};
-  if(token)headers.Authorization='Bearer '+token;
-  const r=await stub.fetch('https://auth'+path,{method:'POST',headers,body:JSON.stringify(body||{})});
-  return r;
+  if(token) headers.Authorization='Bearer '+token;
+  return stub.fetch('https://auth'+path,{method:'POST',headers,body:JSON.stringify(body||{})});
 }
 
 export default {
   async fetch(request, env) {
-    const url=new URL(request.url);
-    if(url.pathname==='/api/register' || url.pathname==='/api/login'){
+    const url = new URL(request.url);
+    if(url.pathname==='/api/register'||url.pathname==='/api/login'){
       if(request.method!=='POST')return new Response('Method Not Allowed',{status:405});
       return authCall(env,url.pathname,await request.json().catch(()=>({})));
     }
-    if(url.pathname==='/api/profile' || url.pathname==='/api/profile/save'){
-      const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');
-      if(!token)return Response.json({error:'Unauthorized'},{status:401});
-      return authCall(env,url.pathname,await request.json().catch(()=>({})),token);
-    }
-    if(url.pathname==='/api/logout'){
-      const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');
-      return authCall(env,'/api/logout',{},token);
+    if(url.pathname==='/api/profile'||url.pathname==='/api/profile/save'||url.pathname==='/api/logout'){
+      const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'').trim();
+      return authCall(env,url.pathname,url.pathname==='/api/logout'?{}:await request.json().catch(()=>({})),token);
     }
     if(url.pathname==='/ws'){
       if(request.headers.get('Upgrade')!=='websocket')return new Response('WebSocket endpoint',{status:426});
       const token=url.searchParams.get('token')||'';
       if(!token)return new Response('Login required',{status:401});
-      const vr=await authCall(env,'/api/validate',{},token);if(!vr.ok)return new Response('Unauthorized',{status:401});
-      const auth=await vr.json();
-      const room=cleanRoom(url.searchParams.get('room'));
+      const vr=await authCall(env,'/api/validate',{},token);
+      if(!vr.ok)return new Response('Unauthorized',{status:401});
+      const auth=await vr.json(),room=cleanRoom(url.searchParams.get('room'));
       const roomReq=new Request(request,{headers:new Headers(request.headers)});
       roomReq.headers.set('X-LSA-User',auth.username);
       roomReq.headers.set('X-LSA-Profile',btoa(unescape(encodeURIComponent(JSON.stringify(auth.profile)))));
-      roomReq.headers.set('X-LSA-Token',token);
       return env.ROOM.get(env.ROOM.idFromName(room)).fetch(roomReq);
     }
     return env.ASSETS.fetch(request);
   }
 };
 
-export class Auth {
-  constructor(state,env){this.state=state;this.env=env}
-  async hash(password,salt){const enc=new TextEncoder();const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:120000,hash:'SHA-256'},key,256);return this.b64(new Uint8Array(bits))}
-  b64(a){let s='';for(const x of a)s+=String.fromCharCode(x);return btoa(s)}
-  bytes(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return a}
-  async jsonBody(req){return req.json().catch(()=>({}))}
-  async fetch(request){const url=new URL(request.url),path=url.pathname,m=await this.jsonBody(request);const token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');
-    if(path==='/api/register')return this.register(m);
-    if(path==='/api/login')return this.login(m);
-    const username=token?await this.state.storage.get('session:'+token):null;
-    if(!username)return Response.json({error:'Unauthorized'},{status:401});
-    if(path==='/api/profile')return this.profile(username);
-    if(path==='/api/profile/save')return this.save(username,m);
-    if(path==='/api/logout'){await this.state.storage.delete('session:'+token);return Response.json({ok:true})}
-    if(path==='/api/validate')return Response.json({username,profile:await this.getProfile(username)});
-    return Response.json({error:'Not found'},{status:404});
-  }
-  profileTemplate(){return {level:1,xp:0,rebirths:0,mult:1,stats:{maxHp:100,atk:14,spd:3.2,armor:0,crit:.08},gear:{weapon:'Rose Blade',bow:'Cupid Bow',armor:'Love Cloth',acc:'None',arrow:'Basic Arrow'},activeWeapon:'Rose Blade',activeWeaponType:'sword',skills:[],passives:[],lastLoot:null,balance:0,profileVersion:5,updatedAt:Date.now()}}
-  async register(m){const username=String(m.username||'').trim();const password=String(m.password||'');if(!/^[A-Za-z0-9_-]{3,24}$/.test(username)||password.length<6)return Response.json({error:'Kullanıcı adı 3-24 karakter olmalı; şifre en az 6 karakter olmalı.'},{status:400});const key='account:'+username.toLowerCase();if(await this.state.storage.get(key))return Response.json({error:'Bu kullanıcı adı zaten kayıtlı.'},{status:409});const salt=this.bytes(16),hash=await this.hash(password,salt),profile=this.profileTemplate();await this.state.storage.put(key,{username,salt:this.b64(salt),hash,profile});return this.issue(username,profile,true)}
-  async login(m){const username=String(m.username||'').trim(),password=String(m.password||'');if(!/^[A-Za-z0-9_-]{3,24}$/.test(username)||password.length<6)return Response.json({error:'Kullanıcı adı veya şifre hatalı.'},{status:400});const rec=await this.state.storage.get('account:'+username.toLowerCase());if(!rec)return Response.json({error:'Kullanıcı adı veya şifre hatalı.'},{status:401});let salt;try{salt=Uint8Array.from(atob(rec.salt),c=>c.charCodeAt(0))}catch{return Response.json({error:'Hesap verisi bozuk.'},{status:500})}const hash=await this.hash(password,salt);if(hash!==rec.hash)return Response.json({error:'Kullanıcı adı veya şifre hatalı.'},{status:401});return this.issue(rec.username,rec.profile||this.profileTemplate())}
-  async issue(username,profile,created=false){const a=this.bytes(32),token=this.b64(a);await this.state.storage.put('session:'+token,username,{expirationTtl:60*60*24*30});return Response.json({ok:true,token,username,profile,created})}
-  async getProfile(username){const rec=await this.state.storage.get('account:'+username.toLowerCase());return rec?.profile||null}
-  async profile(username){return Response.json({ok:true,username,profile:await this.getProfile(username)})}
-  async save(username,m){const key='account:'+username.toLowerCase(),rec=await this.state.storage.get(key);if(!rec)return Response.json({error:'Account missing'},{status:404});const old=rec.profile||this.profileTemplate();const clean={level:Math.max(1,Math.min(9999,Number(m.level)||1)),xp:Math.max(0,Math.min(1e12,Number(m.xp)||0)),rebirths:Math.max(0,Math.min(9999,Number(m.rebirths)||0)),mult:Math.max(1,Math.min(1000,Number(m.mult)||1)),stats:{maxHp:Math.max(20,Math.min(100000,Number(m.stats?.maxHp)||old.stats?.maxHp||100)),atk:Math.max(1,Math.min(10000,Number(m.stats?.atk)||old.stats?.atk||14)),spd:Math.max(.5,Math.min(20,Number(m.stats?.spd)||old.stats?.spd||3.2)),armor:Math.max(0,Math.min(1000,Number(m.stats?.armor)||old.stats?.armor||0)),crit:Math.max(0,Math.min(1,Number(m.stats?.crit)||old.stats?.crit||.08))},gear:m.gear||old.gear||{},activeWeapon:m.activeWeapon||old.activeWeapon||'Rose Blade',activeWeaponType:m.activeWeaponType||old.activeWeaponType||'sword',skills:Array.isArray(m.skills)?m.skills.slice(0,16):Array.isArray(old.skills)?old.skills.slice(0,16):[],passives:Array.isArray(m.passives)?m.passives.slice(0,32):Array.isArray(old.passives)?old.passives.slice(0,32):[],lastLoot:m.lastLoot||old.lastLoot||null,balance:Math.max(0,Math.floor(Number(m.balance)||0)),profileVersion:5,updatedAt:Date.now()};await this.state.storage.put(key,{...rec,profile:clean});return Response.json({ok:true,profile:clean})}
-}
-
 export class Room {
-  constructor(state,env) {
-    this.state=state; this.env=env; this.sockets=new Map(); this.players=new Map();
+  constructor(state) {
+    this.state=state; this.sockets=new Map(); this.players=new Map();
     this.phase='lobby'; this.wave=1; this.enemies=[]; this.spawned=0; this.nextEnemy=1;
     this.lastTick=Date.now(); this.lastState=0; this.stateSeq=0; this.nextTickAlarm=null; this.countdownAt=0;
     this.offer=null; this.picks=new Map(); this.attackSeq=0; this.projectiles=[];
   }
   async fetch(request) {
+    if(new URL(request.url).pathname.startsWith('/api/')) return this.authFetch(request);
     if(request.headers.get('Upgrade')!=='websocket') return new Response('Room online');
     if(this.sockets.size>=MAX_PLAYERS) return new Response('Room full',{status:429});
     const pair=new WebSocketPair(), client=pair[0], server=pair[1]; server.accept();
     const id=crypto.randomUUID();
     this.sockets.set(id,server);
-    const username=request.headers.get('X-LSA-User')||'Player'; let profile={}; try{const raw=request.headers.get('X-LSA-Profile')||''; profile=raw?JSON.parse(decodeURIComponent(escape(atob(raw)))):{};}catch{} const ps=profile.stats||{}; this.players.set(id,{id,name:username,x:WIDTH/2,y:HEIGHT/2,hp:Number(ps.maxHp)||100,maxHp:Number(ps.maxHp)||100,atk:Number(ps.atk)||14,spd:Number(ps.spd)||3.2,armor:Number(ps.armor)||0,crit:Number(ps.crit)||.08,baseMaxHp:Number(ps.maxHp)||100,baseAtk:Number(ps.atk)||14,baseSpd:Number(ps.spd)||3.2,baseArmor:Number(ps.armor)||0,baseCrit:Number(ps.crit)||.08,ix:0,iy:0,angle:0,attackAngle:0,weapon:profile.activeWeaponType==='bow'?'bow':'sword',lastAttack:0,skillCd:0,skill:'',skills:Array.isArray(profile.skills)?profile.skills:[],downed:false,reviveProgress:0,level:Number(profile.level)||1,xp:Number(profile.xp)||0,rebirths:Number(profile.rebirths)||0,mult:Number(profile.mult)||1,passives:Array.isArray(profile.passives)?profile.passives:[],profile:profile,username,inputSeq:0,lastInputAt:Date.now(),lastAttackSeq:0,authToken:request.headers.get('X-LSA-Token')||''});
+    this.players.set(id,{id,name:'Player',x:WIDTH/2,y:HEIGHT/2,hp:100,maxHp:100,atk:14,spd:3.2,armor:0,crit:.08,ix:0,iy:0,angle:0,weapon:'sword',lastAttack:0,skillCd:0,skill:'',skills:[],downed:false,reviveProgress:0,level:1,xp:0,rebirths:0,mult:1,passives:[],inputSeq:0,lastInputAt:Date.now(),lastAttackSeq:0});
     this.send(id,{type:'welcome',id,serverNow:Date.now(),phase:this.phase,wave:this.wave,state:this.snapshotFor(id),serverAuthoritative:true});
     this.broadcastPlayers(); this.ensureAlarm();
     const onMessage=e=>{try{this.message(id,JSON.parse(e.data))}catch{}};
@@ -125,18 +92,66 @@ export class Room {
     return new Response(null,{status:101,webSocket:client});
   }
   resetRoom(){this.phase='lobby';this.wave=1;this.enemies=[];this.projectiles=[];this.spawned=0;this.offer=null;this.picks.clear();this.countdownAt=0;}
+  authUserKey(username){return 'AUTH:USER:'+username.toLowerCase()}
+  authSessionKey(token){return 'AUTH:SESSION:'+token}
+  authB64(bytes){let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s)}
+  authBytes(n){const a=new Uint8Array(n);crypto.getRandomValues(a);return a}
+  async authHash(password,salt){const enc=new TextEncoder();const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:120000,hash:'SHA-256'},key,256);return this.authB64(new Uint8Array(bits))}
+  authProfile(){return {level:1,xp:0,rebirths:0,mult:1,stats:{maxHp:100,atk:14,spd:3.2,armor:0,crit:.08},gear:{weapon:'Rose Blade',bow:'Cupid Bow',armor:'Love Cloth',acc:'None',arrow:'Basic Arrow'},activeWeapon:'Rose Blade',activeWeaponType:'sword',skills:[],passives:[],lastLoot:null,balance:0,profileVersion:5}}
+  async authBody(request){try{return await request.json()}catch{return {}}}
+  async authIssue(username,profile,created=false){const token=this.authB64(this.authBytes(32));await this.state.storage.put(this.authSessionKey(token),username,{expirationTtl:2592000});return Response.json({ok:true,token,username,profile,created})}
+  async authFetch(request){
+    const path=new URL(request.url).pathname,body=await this.authBody(request),token=(request.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'').trim();
+    try{
+      if(path==='/api/register'){
+        const username=String(body.username||'').trim(),password=String(body.password||''),confirm=String(body.confirmPassword??body.password2??password);
+        if(!/^[A-Za-z0-9_-]{3,24}$/.test(username))return Response.json({ok:false,error:'Username must be 3-24 letters, numbers, _ or -'},{status:400});
+        if(password.length<6||password.length>72)return Response.json({ok:false,error:'Password must be 6-72 characters'},{status:400});
+        if(password!==confirm)return Response.json({ok:false,error:'Passwords do not match'},{status:400});
+        const key=this.authUserKey(username);if(await this.state.storage.get(key))return Response.json({ok:false,error:'Username already exists'},{status:409});
+        const salt=this.authBytes(16),hash=await this.authHash(password,salt),profile=this.authProfile();
+        await this.state.storage.put(key,{username,salt:this.authB64(salt),hash,profile});return this.authIssue(username,profile,true);
+      }
+      if(path==='/api/login'){
+        const username=String(body.username||'').trim(),password=String(body.password||'');
+        if(!username||!password)return Response.json({ok:false,error:'Username and password are required'},{status:400});
+        const rec=await this.state.storage.get(this.authUserKey(username));if(!rec)return Response.json({ok:false,error:'Wrong username or password'},{status:401});
+        const salt=Uint8Array.from(atob(rec.salt),c=>c.charCodeAt(0)),hash=await this.authHash(password,salt);if(hash!==rec.hash)return Response.json({ok:false,error:'Wrong username or password'},{status:401});
+        return this.authIssue(rec.username,rec.profile,false);
+      }
+      const username=token?await this.state.storage.get(this.authSessionKey(token)):null;if(!username)return Response.json({ok:false,error:'Unauthorized'},{status:401});
+      if(path==='/api/logout'){await this.state.storage.delete(this.authSessionKey(token));return Response.json({ok:true})}
+      const key=this.authUserKey(username),rec=await this.state.storage.get(key);if(!rec)return Response.json({ok:false,error:'Account missing'},{status:404});
+      if(path==='/api/profile'||path==='/api/validate')return Response.json({ok:true,username,profile:rec.profile});
+      if(path==='/api/profile/save'){
+        const old=rec.profile||this.authProfile(),i=body||{};
+        const clean={...old,level:Math.max(1,Math.min(9999,Math.floor(Number(i.level)||old.level||1))),xp:Math.max(0,Math.min(1e12,Number(i.xp)||0)),rebirths:Math.max(0,Math.min(9999,Math.floor(Number(i.rebirths)||0))),mult:Math.max(1,Math.min(1000,Number(i.mult)||1)),stats:{maxHp:Math.max(20,Math.min(100000,Number(i.stats?.maxHp)||old.stats?.maxHp||100)),atk:Math.max(1,Math.min(10000,Number(i.stats?.atk)||old.stats?.atk||14)),spd:Math.max(.5,Math.min(20,Number(i.stats?.spd)||old.stats?.spd||3.2)),armor:Math.max(0,Math.min(1000,Number(i.stats?.armor)||old.stats?.armor||0)),crit:Math.max(0,Math.min(1,Number(i.stats?.crit)||old.stats?.crit||.08))},gear:i.gear||old.gear,activeWeapon:i.activeWeapon||old.activeWeapon,activeWeaponType:i.activeWeaponType||old.activeWeaponType,skills:Array.isArray(i.skills)?i.skills.slice(0,16):old.skills||[],passives:Array.isArray(i.passives)?i.passives.slice(0,32):old.passives||[],lastLoot:i.lastLoot??old.lastLoot??null,balance:Math.max(0,Math.floor(Number(i.balance)||0)),profileVersion:5};
+        await this.state.storage.put(key,{...rec,profile:clean});return Response.json({ok:true,profile:clean});
+      }
+      return Response.json({ok:false,error:'Not found'},{status:404});
+    }catch(err){console.error('AUTH_ERROR',path,err?.stack||err);return Response.json({ok:false,error:'Account service error'},{status:500})}
+  }
   async ensureAlarm(){if(this.nextTickAlarm)return;this.nextTickAlarm=Date.now()+TICK_MS;try{await this.state.storage.setAlarm(this.nextTickAlarm)}catch{this.nextTickAlarm=null}}
   async alarm(){this.nextTickAlarm=null;const now=Date.now();this.tick(now);if(this.sockets.size)await this.ensureAlarm()}
   message(id,m){const p=this.players.get(id);if(!p)return;
-    if(m.type==='join'){p.name=String(p.username||m.name||'Player').slice(0,20)||'Player';this.broadcastPlayers();this.broadcastState(true);return;}
-    if(m.type==='progressSync'){ this.send(id,{type:'progression',progression:this.progression(p)}); return; }
+    if(m.type==='join'){p.name=String(m.name||'Player').slice(0,20)||'Player';this.setStats(p,m.stats);if(m.progression){p.level=clamp(Number(m.progression.level)||p.level,1,9999);p.xp=clamp(Number(m.progression.xp)||0,0,1e12);p.rebirths=clamp(Number(m.progression.rebirths)||p.rebirths,0,9999);p.mult=clamp(Number(m.progression.mult)||p.mult,1,1000);p.progressRev=clamp(Number(m.progression.progressRev)||p.progressRev,0,1e9);}this.broadcastPlayers();this.broadcastState(true);return;}
+    if(m.type==='progressSync' && m.progression){
+      const pr=m.progression;
+      const rev=clamp(Number(pr.progressRev)||0,0,1e9);
+      if(rev>=p.progressRev){
+        p.level=clamp(Number(pr.level)||p.level,1,9999);p.xp=clamp(Number(pr.xp)||0,0,1e12);p.rebirths=clamp(Number(pr.rebirths)||p.rebirths,0,9999);p.mult=clamp(Number(pr.mult)||p.mult,1,1000);
+        p.progressRev=rev;
+        this.send(id,{type:'progression',progression:this.progression(p)});this.broadcastState(true);
+      }
+      return;
+    }
     if(m.type==='restartRequest' && this.phase==='gameover' && this.players.size>=1){
       this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+1200;
       for(const q of this.players.values()){q.x=WIDTH/2;q.y=HEIGHT/2;q.hp=q.maxHp;q.downed=false;q.reviveProgress=0;q.ix=0;q.iy=0;q.lastAttack=0;q.inputSeq=0;q.lastInputAt=Date.now()}
       this.broadcast({type:'serverRestart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
     }
     if(m.type==='startRequest' && this.phase==='lobby' && this.players.size>=1){
-      this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+2000;
+      this.setStats(p,m.stats);this.phase='countdown';this.enemies=[];this.spawned=0;this.wave=1;this.picks.clear();this.offer=null;this.countdownAt=Date.now()+2000;
       this.broadcast({type:'serverStart',startAt:this.countdownAt,serverNow:Date.now()});this.broadcastState(true);return;
     }
     if(m.type==='input' && (this.phase==='battle'||this.phase==='countdown')){
@@ -197,12 +212,13 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     while(p.xp>=this.xpNeed(p.level)){
       p.xp-=this.xpNeed(p.level); p.level++; leveled=true;
       const scale=p.mult||1;
-      p.baseMaxHp+=Math.round(12*scale); p.baseAtk+=Math.round(2.5*scale*10)/10; p.baseSpd+=.05*scale; p.baseArmor+=.35*scale; p.maxHp=p.baseMaxHp; p.atk=p.baseAtk; p.spd=p.baseSpd; p.armor=p.baseArmor; p.hp=p.maxHp;
+      p.maxHp+=Math.round(12*scale); p.atk+=Math.round(2.5*scale*10)/10; p.spd+=.05*scale; p.armor+=.35*scale;
+      p.hp=p.maxHp;
     }
     p.progressRev++;
     return leveled;
   }
-  progression(p){return {level:p.level||1,xp:p.xp||0,rebirths:p.rebirths||0,mult:p.mult||1,progressRev:p.progressRev||0,stats:{maxHp:p.baseMaxHp??p.maxHp,atk:p.baseAtk??p.atk,spd:p.baseSpd??p.spd,armor:p.baseArmor??p.armor,crit:p.baseCrit??p.crit}}}
+  progression(p){return {level:p.level||1,xp:p.xp||0,rebirths:p.rebirths||0,mult:p.mult||1,progressRev:p.progressRev||0,stats:{maxHp:p.maxHp,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit}}}
   killEnemy(e,owner){
     if(!e||!this.enemies.some(x=>x.id===e.id))return;
     const baseReward=e.boss?80+this.wave*8:3+Math.floor(this.wave*.9);
@@ -221,7 +237,6 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
       // co-op contribution share remains the base share before that bonus.
       if(p.passives?.includes('fortune')) reward=Math.ceil(reward*1.15);
       this.awardXp(p,xp);
-      this.persistProfile(p);
       this.send(id,{
         type:'reward',
         reward,
@@ -233,7 +248,6 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
       });
     }
   }
-  async persistProfile(p){if(!p?.authToken)return;const profile={level:p.level,xp:p.xp,rebirths:p.rebirths,mult:p.mult,stats:{maxHp:p.baseMaxHp??p.maxHp,atk:p.baseAtk??p.atk,spd:p.baseSpd??p.spd,armor:p.baseArmor??p.armor,crit:p.baseCrit??p.crit},gear:p.profile?.gear||{},activeWeapon:p.profile?.activeWeapon||'Rose Blade',activeWeaponType:p.profile?.activeWeaponType||'sword',skills:p.skills||[],passives:p.passives||[],lastLoot:p.profile?.lastLoot||null,balance:Number(p.profile?.balance||0),profileVersion:4};try{const r=await this.env.AUTH.get(this.env.AUTH.idFromName('AUTH')).fetch('https://auth/api/profile/save',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+p.authToken},body:JSON.stringify(profile)});if(r.ok)p.profile=profile;}catch{}}
   serverSkill(p,m){
     const now=Date.now();
     if(p.skillCd>0)return;
@@ -289,7 +303,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     if(clientAttackSeq && clientAttackSeq<=p.lastAttackSeq)return;
     p.lastAttackSeq=Math.max(p.lastAttackSeq,clientAttackSeq);p.lastAttack=now;
     const weapon=m.weapon==='bow'?'bow':'sword';p.weapon=weapon;
-    const angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.attackAngle||p.angle;p.angle=angle;p.attackAngle=angle;
+    const angle=Number.isFinite(Number(m.angle))?Number(m.angle):p.angle;p.angle=angle;
     if(weapon==='bow'){
       const projectile={
         id:'a'+(++this.attackSeq),owner:p.id,x:p.x+Math.cos(angle)*22,y:p.y+Math.sin(angle)*22,
@@ -446,7 +460,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     if(now-this.lastState>=STATE_MS)this.broadcastState(false)
   }
   snapshotFor(id){const p=this.players.get(id);return this.makeState(p)}
-  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,attackAngle:p.attackAngle||p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0,inputSeq:p.inputSeq||0,progression:this.progression(p)}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,attackAngle:q.attackAngle||q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,xp:q.xp||0,rebirths:q.rebirths||0,mult:q.mult||1,progressRev:q.progressRev||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life,hit:!!a.hit}))}}
+  makeState(p){return {phase:this.phase,wave:this.wave,stateSeq:this.stateSeq,serverNow:Date.now(),player:p?{x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,atk:p.atk,spd:p.spd,armor:p.armor,crit:p.crit,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0,inputSeq:p.inputSeq||0,progression:this.progression(p)}:null,players:[...this.players.values()].map(q=>({id:q.id,name:q.name,x:q.x,y:q.y,hp:q.hp,maxHp:q.maxHp,angle:q.angle,weapon:q.weapon||'sword',skill:q.skill||'',skillCd:q.skillCd||0,downed:!!q.downed,reviveProgress:q.reviveProgress||0,level:q.level||1,xp:q.xp||0,rebirths:q.rebirths||0,mult:q.mult||1,progressRev:q.progressRev||0})),enemies:this.enemies,projectiles:this.projectiles.map(a=>({id:a.id,owner:a.owner,x:a.x,y:a.y,vx:a.vx,vy:a.vy,angle:a.angle,life:a.life,hit:!!a.hit}))}}
   broadcastState(force=false){
     const now=Date.now();
     if(!force && now-this.lastState<STATE_MS)return;
@@ -454,7 +468,7 @@ name:type==='boss'?BOSS_DEFS[(Math.floor(this.wave/5)-1)%BOSS_DEFS.length].name:
     this.stateSeq++;
     for(const id of this.sockets.keys())this.send(id,{type:'state',...this.makeState(this.players.get(id))});
   }
-  broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,attackAngle:p.attackAngle||p.angle,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}))})}
+  broadcastPlayers(){this.broadcast({type:'players',players:[...this.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,angle:p.angle,weapon:p.weapon||'sword',skill:p.skill||'',skillCd:p.skillCd||0,downed:!!p.downed,reviveProgress:p.reviveProgress||0}))})}
   send(id,msg){const ws=this.sockets.get(id);if(ws)try{ws.send(JSON.stringify(msg))}catch{}}
   broadcast(msg){const d=JSON.stringify(msg);for(const[id,ws]of this.sockets){try{ws.send(d)}catch{this.sockets.delete(id);this.players.delete(id)}}}
 }
