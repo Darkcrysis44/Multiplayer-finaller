@@ -777,57 +777,25 @@ function saveArena(){
 function progressionSnapshot(){return {level:Number(arenaState.level||1),xp:Number(arenaState.xp||0),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),stats:{maxHp:Number(arenaState.stats.maxHp||100),atk:Number(arenaState.stats.atk||14),spd:Number(arenaState.stats.spd||3.2),armor:Number(arenaState.stats.armor||0),crit:Number(arenaState.stats.crit||.08)}}}
 function applyProgressionSnapshot(pr,source='sync'){
   if(!pr)return;
-  const nextLevel=Math.max(1,Number(pr.level)||1);
-  const nextXp=Math.max(0,Number(pr.xp)||0);
+  const nextLevel=Math.max(1,Number(pr.level)||1), nextXp=Math.max(0,Number(pr.xp)||0);
   const oldLevel=Math.max(1,Number(arenaState.level)||1);
-
-  // Server snapshots are authoritative. Never re-apply level-up stat deltas
-  // on top of stats that the server has already calculated. This prevents
-  // reconnect/login from multiplying stats repeatedly.
-  if(source==='server'){
-    arenaState.level=nextLevel;
-    arenaState.xp=nextXp;
-    arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
-    if(Number.isFinite(Number(pr.rebirths))) arenaState.rebirths=Math.max(0,Number(pr.rebirths));
-    if(Number.isFinite(Number(pr.mult))) arenaState.mult=Math.max(1,Number(pr.mult));
-
-    if(pr.stats){
-      const st=pr.stats;
-      if(Number.isFinite(Number(st.maxHp))) arenaState.stats.maxHp=Math.max(20,Number(st.maxHp));
-      if(Number.isFinite(Number(st.atk))) arenaState.stats.atk=Math.max(1,Number(st.atk));
-      if(Number.isFinite(Number(st.spd))) arenaState.stats.spd=Math.max(.5,Number(st.spd));
-      if(Number.isFinite(Number(st.armor))) arenaState.stats.armor=Math.max(0,Number(st.armor));
-      if(Number.isFinite(Number(st.crit))) arenaState.stats.crit=Math.max(0,Number(st.crit));
-      arena.player.hp=Math.min(arena.player.hp,arenaState.stats.maxHp);
-      if(arena.player.hp<=0) arena.player.hp=arenaState.stats.maxHp;
-    }
-    saveArena();
-    arenaStats();
-    return;
-  }
-
-  // Local progression (solo gameplay) is allowed to apply only actual
-  // level transitions. A snapshot of the same level never grants stats.
   if(nextLevel>oldLevel){
-    for(let lv=oldLevel+1;lv<=nextLevel;lv++){
-      const scale=Number(arenaState.mult||1);
-      arenaState.stats.maxHp+=Math.round(12*scale);
-      arenaState.stats.atk+=Math.round(2.5*scale*10)/10;
-      arenaState.stats.spd+=.05*scale;
-      arenaState.stats.armor+=.35*scale;
-    }
+    for(let lv=oldLevel+1;lv<=nextLevel;lv++){const scale=Number(arenaState.mult||1);arenaState.stats.maxHp+=Math.round(12*scale);arenaState.stats.atk+=Math.round(2.5*scale*10)/10;arenaState.stats.spd+=.05*scale;arenaState.stats.armor+=.35*scale;}
     arena.player.hp=arenaState.stats.maxHp;
-    sfx('level');
-    toast('LEVEL UP! ✨ Lv '+nextLevel);
-    arenaLog('Level '+nextLevel+' synced from '+source+'.');
+    if(nextLevel>oldLevel){sfx('level');toast('LEVEL UP! ✨ Lv '+nextLevel);arenaLog('Level '+nextLevel+' synced from '+source+'.');}
   }
-  arenaState.level=nextLevel;
-  arenaState.xp=nextXp;
-  arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
+  arenaState.level=nextLevel;arenaState.xp=nextXp;arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
   if(Number.isFinite(Number(pr.rebirths)))arenaState.rebirths=Math.max(0,Number(pr.rebirths));
   if(Number.isFinite(Number(pr.mult)))arenaState.mult=Math.max(1,Number(pr.mult));
-  saveArena();
-  arenaStats();
+  if(pr.stats&&source==='server'){
+    // Server combat values include the persistent level gains; only merge level-derived deltas here.
+    arenaState.stats.maxHp=Math.max(arenaState.stats.maxHp,Number(pr.stats.maxHp)||arenaState.stats.maxHp);
+    arenaState.stats.atk=Math.max(arenaState.stats.atk,Number(pr.stats.atk)||arenaState.stats.atk);
+    arenaState.stats.spd=Math.max(arenaState.stats.spd,Number(pr.stats.spd)||arenaState.stats.spd);
+    arenaState.stats.armor=Math.max(arenaState.stats.armor,Number(pr.stats.armor)||arenaState.stats.armor);
+    arenaState.stats.crit=Math.max(arenaState.stats.crit,Number(pr.stats.crit)||arenaState.stats.crit);
+  }
+  saveArena();arenaStats();
 }
 function sendProgressionSync(){if(coopSocket&&coopSocket.readyState===1&&coopStarted)coopSend({type:'progressSync',progression:progressionSnapshot()});}
 function initArenaAudio(){if(arenaAudio)return;try{arenaAudio=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}
