@@ -436,18 +436,6 @@ body:before{
  </div>
 </div>
 
-<div class="coop-modal hidden" id="authModal" style="z-index:9999">
- <div class="coop-box">
-  <div class="coop-title">🔐 Love Sword Arena Account</div>
-  <div class="coop-sub">Your arena level, XP, stats, skills and gear can be saved to your account.</div>
-  <label>Username</label><input id="authUsername" maxlength="24" autocomplete="username">
-  <label>Password</label><input id="authPassword" type="password" maxlength="72" autocomplete="current-password">
-  <label id="authConfirmLabel">Repeat password</label><input id="authConfirm" type="password" maxlength="72" autocomplete="new-password">
-  <div class="coop-row"><button class="lsa-btn" id="authLogin">Login</button><button class="lsa-btn" id="authRegister">Create account</button></div>
-  <div id="authStatus" class="coop-status">Not signed in</div>
-  <button class="lsa-btn" id="authClose">Continue as guest</button>
- </div>
-</div>
 <div class="coop-modal hidden" id="coopModal">
  <div class="coop-box">
   <div class="coop-title">🌐 Love Sword Arena — Online Co-op</div>
@@ -770,58 +758,6 @@ render();
 
 /* ================= LOVE SWORD ARENA ================= */
 const $ = id => document.getElementById(id);
-const ACCOUNT_TOKEN_KEY='lsa.account.token.v1';
-let accountToken=localStorage.getItem(ACCOUNT_TOKEN_KEY)||'';
-let accountUser=localStorage.getItem('lsa.account.user.v1')||'';
-let accountLoaded=false,accountSaveTimer=0,accountLoading=false;
-function authStatus(text){const el=$('authStatus');if(el)el.textContent=text}
-function authOpen(){
-  $('authModal').classList.remove('hidden');
-  $('authUsername').value=accountUser||'';
-  $('authConfirmLabel').style.display='block';$('authConfirm').style.display='block';
-}
-function authClose(){$('authModal').classList.add('hidden')}
-function profilePayload(){return {level:Number(arenaState.level||1),xp:Number(arenaState.xp||0),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),stats:{maxHp:Number(arenaState.stats.maxHp||100),atk:Number(arenaState.stats.atk||14),spd:Number(arenaState.stats.spd||3.2),armor:Number(arenaState.stats.armor||0),crit:Number(arenaState.stats.crit||.08)},gear:arenaState.gear,activeWeapon:arenaState.activeWeapon,activeWeaponType:arenaState.activeWeaponType,skills:arenaState.skills,passives:arenaState.passives,lastLoot:arenaState.lastLoot,balance:Number(loveBalance||0)}}
-function applyAccountProfile(profile){
-  if(!profile)return;
-  // Server profile is canonical: replace, never add level-derived stats again.
-  arenaState.level=Math.max(1,Number(profile.level)||1);arenaState.xp=Math.max(0,Number(profile.xp)||0);arenaState.rebirths=Math.max(0,Number(profile.rebirths)||0);arenaState.mult=Math.max(1,Number(profile.mult)||1);
-  arenaState.stats=Object.assign({},arenaBase,profile.stats||{});
-  arenaState.gear=Object.assign({},arenaState.gear,profile.gear||{});arenaState.activeWeapon=profile.activeWeapon||arenaState.activeWeapon;arenaState.activeWeaponType=profile.activeWeaponType||arenaState.activeWeaponType;
-  arenaState.skills=Array.isArray(profile.skills)?profile.skills:[];arenaState.passives=Array.isArray(profile.passives)?profile.passives:[];arenaState.lastLoot=profile.lastLoot||null;
-  if(typeof profile.balance==='number'){loveBalance=Math.max(0,Math.floor(profile.balance));updateBalance()}
-  arena.player.hp=Math.min(arena.player.hp||arenaState.stats.maxHp,arenaState.stats.maxHp);saveArena(false);arenaStats();
-}
-async function accountRequest(path,body={},method='POST'){
-  const headers={'Content-Type':'application/json'};if(accountToken)headers.Authorization='Bearer '+accountToken;
-  const r=await fetch(path,{method,headers,body:method==='GET'?undefined:JSON.stringify(body)});
-  let data={};try{data=await r.json()}catch{}
-  if(!r.ok)throw new Error(data.error||('HTTP '+r.status));return data;
-}
-async function accountLoginOrRegister(kind){
-  if(accountLoading)return;accountLoading=true;authStatus('Connecting…');
-  try{
-    const username=$('authUsername').value.trim(),password=$('authPassword').value,confirm=$('authConfirm').value;
-    const data=await accountRequest(kind==='register'?'/api/register':'/api/login',{username,password,confirmPassword:confirm});
-    accountToken=data.token;accountUser=data.username;accountLoaded=false;localStorage.setItem(ACCOUNT_TOKEN_KEY,accountToken);localStorage.setItem('lsa.account.user.v1',accountUser);
-    applyAccountProfile(data.profile);accountLoaded=true;authStatus('Signed in as '+accountUser);setTimeout(authClose,250);
-    toast('Account synced ✓');
-  }catch(e){authStatus('⚠️ '+e.message)}finally{accountLoading=false}
-}
-async function restoreAccount(){
-  if(!accountToken)return;
-  try{const data=await accountRequest('/api/profile',{},'POST');accountUser=data.username;applyAccountProfile(data.profile);accountLoaded=true;localStorage.setItem('lsa.account.user.v1',accountUser)}catch(e){accountToken='';localStorage.removeItem(ACCOUNT_TOKEN_KEY);localStorage.removeItem('lsa.account.user.v1');accountLoaded=false}
-}
-function queueAccountSave(){
-  if(!accountToken||!accountLoaded)return;
-  clearTimeout(accountSaveTimer);accountSaveTimer=setTimeout(async()=>{try{await accountRequest('/api/profile/save',profilePayload())}catch(e){console.warn('profile save failed',e)}},500);
-}
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&accountToken&&accountLoaded){accountRequest('/api/profile/save',profilePayload()).catch(()=>{})}});
-window.addEventListener('beforeunload',()=>{if(accountToken&&accountLoaded){try{fetch('/api/profile/save',{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','Authorization':'Bearer '+accountToken},body:JSON.stringify(profilePayload())})}catch{}}});
-$('authLogin').onclick=()=>accountLoginOrRegister('login');
-$('authRegister').onclick=()=>accountLoginOrRegister('register');
-$('authClose').onclick=authClose;
-
 const arenaModal=document.getElementById('arenaModal'),arenaChoice=document.getElementById('arenaChoice'),arenaCanvas=document.getElementById('lsaCanvas');
 const ac=arenaCanvas.getContext('2d');
 const arenaBase={maxHp:100,atk:14,spd:3.2,crit:.08,armor:0};
@@ -833,29 +769,65 @@ const arenaState={
 let arena={running:false,wave:1,enemies:[],projectiles:[],particles:[],slashes:[],keys:{},last:0,spawned:0,kills:0,shake:0,mouseX:0,mouseY:0,player:{x:0,y:0,hp:100,dir:1,angle:0,attackCd:0,slashT:0,inv:0,skillCd:0}};
 let arenaAudio=null;
 let coopServerStats=null;
-function saveArena(sync=true){
-  arenaState.profileVersion=5;
+function saveArena(){
+  arenaState.profileVersion=3;
   arenaState.lastSavedAt=Date.now();
   localStorage.setItem('nicoletaLoveArena',JSON.stringify(arenaState));
-  if(sync)queueAccountSave();
 }
 function progressionSnapshot(){return {level:Number(arenaState.level||1),xp:Number(arenaState.xp||0),rebirths:Number(arenaState.rebirths||0),mult:Number(arenaState.mult||1),stats:{maxHp:Number(arenaState.stats.maxHp||100),atk:Number(arenaState.stats.atk||14),spd:Number(arenaState.stats.spd||3.2),armor:Number(arenaState.stats.armor||0),crit:Number(arenaState.stats.crit||.08)}}}
 function applyProgressionSnapshot(pr,source='sync'){
   if(!pr)return;
-  const nextLevel=Math.max(1,Number(pr.level)||1),nextXp=Math.max(0,Number(pr.xp)||0);
-  arenaState.level=nextLevel;arenaState.xp=nextXp;
+  const nextLevel=Math.max(1,Number(pr.level)||1);
+  const nextXp=Math.max(0,Number(pr.xp)||0);
+  const oldLevel=Math.max(1,Number(arenaState.level)||1);
+
+  // Server snapshots are authoritative. Never re-apply level-up stat deltas
+  // on top of stats that the server has already calculated. This prevents
+  // reconnect/login from multiplying stats repeatedly.
+  if(source==='server'){
+    arenaState.level=nextLevel;
+    arenaState.xp=nextXp;
+    arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
+    if(Number.isFinite(Number(pr.rebirths))) arenaState.rebirths=Math.max(0,Number(pr.rebirths));
+    if(Number.isFinite(Number(pr.mult))) arenaState.mult=Math.max(1,Number(pr.mult));
+
+    if(pr.stats){
+      const st=pr.stats;
+      if(Number.isFinite(Number(st.maxHp))) arenaState.stats.maxHp=Math.max(20,Number(st.maxHp));
+      if(Number.isFinite(Number(st.atk))) arenaState.stats.atk=Math.max(1,Number(st.atk));
+      if(Number.isFinite(Number(st.spd))) arenaState.stats.spd=Math.max(.5,Number(st.spd));
+      if(Number.isFinite(Number(st.armor))) arenaState.stats.armor=Math.max(0,Number(st.armor));
+      if(Number.isFinite(Number(st.crit))) arenaState.stats.crit=Math.max(0,Number(st.crit));
+      arena.player.hp=Math.min(arena.player.hp,arenaState.stats.maxHp);
+      if(arena.player.hp<=0) arena.player.hp=arenaState.stats.maxHp;
+    }
+    saveArena();
+    arenaStats();
+    return;
+  }
+
+  // Local progression (solo gameplay) is allowed to apply only actual
+  // level transitions. A snapshot of the same level never grants stats.
+  if(nextLevel>oldLevel){
+    for(let lv=oldLevel+1;lv<=nextLevel;lv++){
+      const scale=Number(arenaState.mult||1);
+      arenaState.stats.maxHp+=Math.round(12*scale);
+      arenaState.stats.atk+=Math.round(2.5*scale*10)/10;
+      arenaState.stats.spd+=.05*scale;
+      arenaState.stats.armor+=.35*scale;
+    }
+    arena.player.hp=arenaState.stats.maxHp;
+    sfx('level');
+    toast('LEVEL UP! ✨ Lv '+nextLevel);
+    arenaLog('Level '+nextLevel+' synced from '+source+'.');
+  }
+  arenaState.level=nextLevel;
+  arenaState.xp=nextXp;
+  arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
   if(Number.isFinite(Number(pr.rebirths)))arenaState.rebirths=Math.max(0,Number(pr.rebirths));
   if(Number.isFinite(Number(pr.mult)))arenaState.mult=Math.max(1,Number(pr.mult));
-  if(pr.stats){
-    arenaState.stats.maxHp=Math.max(20,Number(pr.stats.maxHp)||arenaState.stats.maxHp);
-    arenaState.stats.atk=Math.max(1,Number(pr.stats.atk)||arenaState.stats.atk);
-    arenaState.stats.spd=Math.max(.5,Number(pr.stats.spd)||arenaState.stats.spd);
-    arenaState.stats.armor=Math.max(0,Number(pr.stats.armor)||arenaState.stats.armor);
-    arenaState.stats.crit=Math.max(0,Number(pr.stats.crit)||arenaState.stats.crit);
-  }
-  arenaState.lastProgressRev=Math.max(Number(arenaState.lastProgressRev)||0,Number(pr.progressRev)||0);
-  arena.player.hp=Math.min(arena.player.hp||arenaState.stats.maxHp,arenaState.stats.maxHp);
-  saveArena();arenaStats();
+  saveArena();
+  arenaStats();
 }
 function sendProgressionSync(){if(coopSocket&&coopSocket.readyState===1&&coopStarted)coopSend({type:'progressSync',progression:progressionSnapshot()});}
 function initArenaAudio(){if(arenaAudio)return;try{arenaAudio=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}
@@ -1068,7 +1040,7 @@ function coopReconcile(serverX,serverY,ackSeq){
   coopHasPredictedPosition=true;
   coopServerX=serverX;coopServerY=serverY;
 }
-function coopUrl(room){const proto=location.protocol==='https:'?'wss:':'ws:';return proto+'//'+location.host+'/ws?room='+encodeURIComponent(room)+'&token='+encodeURIComponent(accountToken)}
+function coopUrl(room){const proto=location.protocol==='https:'?'wss:':'ws:';return proto+'//'+location.host+'/ws?room='+encodeURIComponent(room)}
 function coopSetStatus(t){const el=$('coopStatus');if(el)el.textContent=t}
 function coopRenderPlayers(players){
   coopPeers={};
@@ -1077,7 +1049,6 @@ function coopRenderPlayers(players){
   updateCoopLobby();
 }
 function coopConnect(){
-  if(!accountToken||!accountLoaded){authOpen();authStatus('Login or create an account before using online co-op.');return;}
   const room=($('coopRoom').value||'LOVE').toUpperCase().replace(/[^A-Z0-9_-]/g,'').slice(0,24)||'LOVE';
   const name=($('coopName').value||'Player').slice(0,20)||'Player';coopRoom=room;
   try{if(coopSocket)coopSocket.close()}catch(e){}
@@ -1520,8 +1491,6 @@ window.addEventListener('keydown',e=>{if(arenaModal.classList.contains('hidden')
 arenaCanvas.addEventListener('mousedown',e=>{const r=arenaCanvas.getBoundingClientRect();const x=e.clientX-r.left,y=e.clientY-r.top;arena.mouseX=x;arena.mouseY=y;slash(Math.atan2(y-arena.player.y,x-arena.player.x))});
 $('lsaSkillUse').onclick=useSkill;arenaCanvas.addEventListener('touchstart',e=>{const t=e.touches[0],r=arenaCanvas.getBoundingClientRect();slash(Math.atan2(t.clientY-r.top-arena.player.y,t.clientX-r.left-arena.player.x))},{passive:true});
 
-
-restoreAccount();
 </script>
 </body>
 </html>
